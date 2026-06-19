@@ -1462,7 +1462,9 @@ tsne <- reactive({
   perplexity = input$perplexity
   tsne = tsneFunc(dimRedSelection = dimRedCols, perplexity = perplexity, sce, somCodesName)
   return(tsne)
-}) %>% debounce(1000)
+}) %>%
+  debounce(1000) %>%
+  bindCache(dimRedSelection(), input$perplexity)
 
 umap <- reactive({
   seed = 1
@@ -1472,14 +1474,19 @@ umap <- reactive({
   pumap$n_neighbors = input$n_neighbors
   um = umap::umap(metaD[[somCodesName]][,dimRedCols],config = pumap)
   return(um)
-}) %>% debounce(1000)
+}) %>%
+  debounce(1000) %>%
+  bindCache(input$dimRedSelection, input$n_neighbors)
+
 pca <- reactive({
   seed = 1
   dimRedCols = input$dimRedSelection
   set.seed(seed)
   pca = prcomp(t(metaD[[somCodesName]][,dimRedCols]), scale =F,rank. = 2)
   return(pca)
-}) %>% debounce(1000)
+}) %>%
+  debounce(1000) %>%
+  bindCache(input$dimRedSelection)
 
 output$tsne <- renderPlotly({
   p3 = tsnePlot()
@@ -1664,7 +1671,7 @@ scatterPlot <- reactive({
   req(rs)
   dimSelection =  dimSelection()
   sampleIds = input$samples2plot
-  # browser()
+  browser()
   plotIdx = activePlot()
   cidIdx = colData(sce_subsampled)$cluster_id %in% rs & colData(sce_subsampled)$sample_id %in% sampleIds
   if(length(cidIdx)<1)return(NULL)
