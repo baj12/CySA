@@ -33,7 +33,7 @@
 #' @importFrom Rtsne Rtsne
 #' @importFrom umap umap umap.defaults
 #' @importFrom RColorBrewer brewer.pal
-#' @importFrom grDevices colorRampPalette pdf dev.off
+#' @importFrom grDevices colorRampPalette pdf dev.off recordPlot replayPlot
 #' @importFrom stats prcomp t.test sd reorder
 #' @importFrom utils globalVariables str
 #' @importFrom Matrix rowSums

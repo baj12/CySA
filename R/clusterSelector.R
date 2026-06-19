@@ -93,6 +93,19 @@ clusterSelector <- function(sce, # main input has to contain:
   somRasterData = somRasterData[,c("x", "y", metaD$map$colsUsed)]
   somRasterObj = somRasterObj[[metaD$map$colsUsed]]
 
+  # Pre-render the static SOM raster background once and record it.
+  # The overlay (selected nodes) is added per-render, avoiding repeated
+  # expensive raster::plot() calls every time rs changes.
+  baseRasterPlot <- NULL
+  if (!is.null(somRasterObj)) {
+    tmpRasterFile <- tempfile(fileext = ".png")
+    grDevices::png(tmpRasterFile, width = 1200, height = 1200)
+    tryCatch({
+      raster::plot(somRasterObj, maxnl = 80)
+      baseRasterPlot <- grDevices::recordPlot()
+    }, finally = grDevices::dev.off())
+  }
+
   # Pre-compute per-channel axis limits once from the full assay matrix.
   # This avoids scanning assays(sce)[[1]] every time dimSelection changes.
   assay_mat <- SummarizedExperiment::assays(sce)[[1]]
@@ -1650,9 +1663,12 @@ scatterPlot <- reactive({
 
 # somRaster ----
 output$somRaster = renderPlot({
-  message("somRasterPlot(): ", class(somRasterPlot()))
-  res = somRasterPlot()
-  raster::plot(res[[1]], addfun = res[[2]], maxnl=80)
+  xy = somRasterPlot()
+  req(xy)
+  req(baseRasterPlot)
+  grDevices::replayPlot(baseRasterPlot)
+  points(xy, cex = 2)
+  points(xy, pch = 3, col = 'red')
 })
 
 # somRasterSelect ----
@@ -1683,14 +1699,7 @@ somRasterPlot = reactive({
 
   rs = rsUsed()
   req(rs)
-  xy = somRasterData[rs,c("x","y")]
-  fun <- function() {
-    points(xy, cex=2)
-    points(xy, pch=3, col='red')
-  }
-  # p = ggplotify::as.ggplot(function() plot(somRasterObj, addfun = fun))
-  # p
-  return(list(somRasterObj, addfun = fun))
+  somRasterData[rs, c("x", "y"), drop = FALSE]
 })
 
 ## VlnPlot ----
