@@ -175,7 +175,7 @@ ggsomPlot <- function(pp1, plotIdx, rs, dimSelection, somCodesName = "SOM_codes"
   return(p3)
 }
 
-somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = NULL, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), outputList = list()){
+somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = NULL, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), outputList = list(), projectionDf = NULL){
   if(is.null(pp1)) return(NULL)
 
   # cp =load(file = "/pasteur/appa/scratch/bernd/dev.RData")
@@ -185,13 +185,8 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = 
   #                                                                 "showGroups"))
   # }
   if(showGroups) {
-    pg <- ggplot_build(pp1)
-    df = pg$data[[1]][,c("x", "y", "label")]
-    df2 = left_join(metadata(sce)$SOM_stats, df, by = join_by(id == label))
-    df = df2[order(df2$id),c("x", "y")]
-    df[is.na(df)] = 0
-    colnames(df) = c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2])
-    p3 = drawProjection(df, rs, colorbyGroups = colorbyGroups, sce = sce, outputList = outputList)
+    req(projectionDf)
+    p3 = drawProjection(projectionDf, rs, colorbyGroups = colorbyGroups, sce = sce, outputList = outputList)
   } else {
     p3 = pp1 + geom_point(data=highlight_df(dimSelection[[plotIdx]]$dims[1],dimSelection[[plotIdx]]$dims[2], rs, somCodesName, metaD = metaD),
                           aes(x=x,y=y, customdata=rs),
@@ -289,13 +284,29 @@ plotViolinFunc <- function(sce, somCodesName = "SOM_codes", upsetSelection, outp
 
 
 
+# Build a data frame of projected SOM coordinates plus SOM_stats, cached per view.
+buildProjectionDf <- function(pp1, plotIdx, dimSelection, sce) {
+  req(pp1, dimSelection)
+  pg <- ggplot_build(pp1)
+  df <- pg$data[[1]][, c("x", "y", "label")]
+  df2 <- dplyr::left_join(S4Vectors::metadata(sce)$SOM_stats, df,
+                          by = dplyr::join_by(id == label))
+  df2 <- df2[order(df2$id), ]
+  df2[is.na(df2)] <- 0
+  ch_names <- dimSelection[[plotIdx]]$dims
+  colnames(df2)[colnames(df2) == "x"] <- ch_names[1]
+  colnames(df2)[colnames(df2) == "y"] <- ch_names[2]
+  # Coordinate columns must be first so drawProjection can locate them
+  coord_idx <- match(ch_names, names(df2))
+  other_idx <- setdiff(seq_along(df2), coord_idx)
+  df2 <- df2[, c(coord_idx, other_idx), drop = FALSE]
+  df2
+}
+
 drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
-  colN = names(df)
-  df$cluster = 1:nrow(df)
-  df$N = S4Vectors::metadata(sce)$SOM_stats$n
-  df$mean = S4Vectors::metadata(sce)$SOM_stats$mean
-  df$thrdQu = S4Vectors::metadata(sce)$SOM_stats$rdQu
-  df$max = S4Vectors::metadata(sce)$SOM_stats$max
+  colN = names(df)[1:2]
+  df$cluster = df$id
+  # N, mean, thrdQu, max are already in df from SOM_stats
   nGrps = 1
   if(length(colorbyGroups)<1){
     colGrp = "lightblue"

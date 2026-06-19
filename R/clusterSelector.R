@@ -1360,6 +1360,18 @@ somBasePlots <- lapply(seq_len(nPlots), function(plotIdx) {
     bindCache(dimSelection()[[plotIdx]]$dims)
 })
 
+# Cached projection data frames for the showGroups SOM view.
+# This avoids repeating ggplot_build() + left_join() every time rs or
+# colorbyGroups change; only the final ggplot construction remains.
+projectionDfs <- lapply(seq_len(nPlots), function(plotIdx) {
+  reactive({
+    pp1 <- somBasePlots[[plotIdx]]()
+    req(pp1)
+    buildProjectionDf(pp1, plotIdx, dimSelection(), sce)
+  }) %>%
+    bindCache(dimSelection()[[plotIdx]]$dims)
+})
+
 lapply(seq_len(nPlots), function(i) {
   local({
     plotIdxLocal <- i
@@ -1374,8 +1386,10 @@ lapply(seq_len(nPlots), function(i) {
       triggerRedraw()
       plotIdx <- if (plotIdxLocal == 6) activePlot() else plotIdxLocal
       pp1 <- somBasePlots[[plotIdx]]()
+      projectionDf <- if (showGroups) projectionDfs[[plotIdx]]() else NULL
       p3 <- somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups,
-                    dimSelection = dimSelection, sce = sce, metaD = metaD, outputList = rv$outputList)
+                    dimSelection = dimSelection, sce = sce, metaD = metaD,
+                    outputList = rv$outputList, projectionDf = projectionDf)
       ggplotly(p3, source = paste0("somData", plotIdxLocal), tooltip = "") %>%
         layout(showlegend = F, dragmode = "select") %>%
         config(renderer = "webgl") %>%
