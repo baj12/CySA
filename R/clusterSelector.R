@@ -93,6 +93,14 @@ clusterSelector <- function(sce, # main input has to contain:
   somRasterData = somRasterData[,c("x", "y", metaD$map$colsUsed)]
   somRasterObj = somRasterObj[[metaD$map$colsUsed]]
 
+  # Pre-compute per-channel axis limits once from the full assay matrix.
+  # This avoids scanning assays(sce)[[1]] every time dimSelection changes.
+  assay_mat <- SummarizedExperiment::assays(sce)[[1]]
+  channelLimits <- lapply(rownames(sce), function(ch) {
+    vals <- assay_mat[ch, ]
+    c(min = min(vals), max = max(vals))
+  })
+  names(channelLimits) <- rownames(sce)
 
   assign(x = "outputList", value = outputList, envir = env)
 
@@ -1906,10 +1914,14 @@ shiny::observe({
   cat(file = stderr(), "\n---changedimSelection\n\n")
   dimSelection = list()
   for(idx in 1:nPlots){
-    dimSelection[[length(dimSelection) + 1]] = list(
-      dims = c(input[[paste0("d",idx,".1")]], input[[paste0("d",idx,".2")]]),
-      xlim = c(min(assays(sce)[[1]][input[[paste0("d",idx,".1")]],]) , max(assays(sce)[[1]][input[[paste0("d",idx,".1")]],])),
-      ylim = c(min(assays(sce)[[1]][input[[paste0("d",idx,".2")]],]), max(assays(sce)[[1]][input[[paste0("d",idx,".2")]],])),
+    d1 <- input[[paste0("d",idx,".1")]]
+    d2 <- input[[paste0("d",idx,".2")]]
+    lim1 <- channelLimits[[d1]]
+    lim2 <- channelLimits[[d2]]
+    dimSelection[[idx]] = list(
+      dims = c(d1, d2),
+      xlim = c(lim1["min"], lim1["max"]),
+      ylim = c(lim2["min"], lim2["max"]),
       xzoom = c(NULL,NULL),
       yzoom = c(NULL,NULL)
     )
