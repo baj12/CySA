@@ -7,3 +7,8 @@
 ^pkgdown$
 ^\.claude$
 ^CLAUDE\.md$
+^\.git$
+^\.gitignore$
+^PLAN\.md$
+^profile1\.Rprofvis$
+^AGENTS.md$
