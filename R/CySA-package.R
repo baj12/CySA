@@ -6,7 +6,7 @@
 #'
 #' @keywords internal
 #' @import shiny
-#' @import shinydashboardPlus
+#' @importFrom shinydashboard dashboardPage dashboardHeader dashboardSidebar sidebarMenu menuItem dashboardBody
 #' @import shinyjqui
 #' @import ggplot2
 #' @import dplyr
