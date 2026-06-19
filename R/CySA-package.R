@@ -6,23 +6,22 @@
 #'
 #' @keywords internal
 #' @import shiny
-#' @import shinydashboard
 #' @import shinydashboardPlus
-#' @import shinyjs
 #' @import shinyjqui
 #' @import ggplot2
 #' @import dplyr
-#' @import tidyr
-#' @import tibble
-#' @import data.table
 #' @import stringr
-#' @import purrr
 #' @import ComplexHeatmap
 #' @import dendextend
 #' @import viridis
 #' @import cowplot
 #' @import ggplotify
 #' @import grid
+#' @importFrom shinyjs useShinyjs extendShinyjs
+#' @importFrom tidyr pivot_longer
+#' @importFrom tibble as_tibble
+#' @importFrom data.table rbindlist
+#' @importFrom purrr map2 set_names imap
 #' @importFrom plotly renderPlotly plotlyOutput ggplotly layout event_register event_data add_trace config
 #' @importFrom DT renderDT DTOutput
 #' @importFrom collapsibleTree collapsibleTreeOutput renderCollapsibleTree

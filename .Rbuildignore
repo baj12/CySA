@@ -12,3 +12,6 @@
 ^PLAN\.md$
 ^profile1\.Rprofvis$
 ^AGENTS.md$
+^open.ai.thoughts.txt$
+^opencode.json$
+^\.env$

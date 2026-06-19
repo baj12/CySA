@@ -1102,7 +1102,7 @@ output$cellCounts <- DT::renderDT(options = list(lengthChange = FALSE,
                                     req(clusterPatientTable)
                                     rSums = rowSums(clusterPatientTable[,rs,drop=F])
                                     names(rSums) = rownames(clusterPatientTable)
-                                    rSums = as.data.table(t(rSums))
+                                    rSums = data.table::as.data.table(t(rSums))
                                     if(!cst=="none"){
                                       if(cst %in% colnames(metaD$experiment_info)){
                                         # expInfo = metaD$experiment_info
@@ -1116,16 +1116,16 @@ output$cellCounts <- DT::renderDT(options = list(lengthChange = FALSE,
                                           browser()
                                         }
                                         # ctStats = eI[,cst]
-                                        ctStats =  as.data.table(t(eI[colnames(rSums),cst]))
+                                        ctStats =  data.table::as.data.table(t(eI[colnames(rSums),cst]))
                                         colnames(ctStats) = colnames(rSums)
                                         rSums = data.table::rbindlist(list(rSums, ctStats))
                                         # rbind(rSums, eI[colnames(rSums),cst])
                                         rownames(rSums) = c("selection", cst)
                                       } else if(cst %in% names(outputList)){
-                                        ctStats =  as.data.table(t(rowSums(clusterPatientTable[,outputList[[cst]],drop=F])))
+                                        ctStats =  data.table::as.data.table(t(rowSums(clusterPatientTable[,outputList[[cst]],drop=F])))
                                         colnames(ctStats) = rownames(clusterPatientTable)
                                         rSums = data.table::rbindlist(list(rSums, ctStats))
-                                        # rSums = data.table::rbindlist(list(rSums, as.data.table(t())))
+                                        # rSums = data.table::rbindlist(list(rSums, data.table::as.data.table(t())))
                                         rownames(rSums) = c("selection", cst)
                                       } else{
                                         cat(file = stderr(), "should not happen\n")
@@ -1133,7 +1133,7 @@ output$cellCounts <- DT::renderDT(options = list(lengthChange = FALSE,
                                       }
                                     }
                                     rn = rownames(rSums)
-                                    ctStats = as.data.table(t(rowSums(clusterPatientTable[,sN,drop=F])))
+                                    ctStats = data.table::as.data.table(t(rowSums(clusterPatientTable[,sN,drop=F])))
                                     colnames(ctStats) = rownames(clusterPatientTable)
                                     rSums = data.table::rbindlist(list(rSums, ctStats))
                                     # rbind(rSums, rowSums(clusterPatientTable[,sN,drop=F]))
