@@ -43,7 +43,6 @@ Imports:
     ggplotify,
     Rtsne,
     umap,
-    raster,
     DT,
     collapsibleTree
 Suggests:

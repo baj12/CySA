@@ -65,7 +65,7 @@ plotScatterBJ <- function (x, chs, gate = NULL, color_by = NULL, facet_by = NULL
                    stringsAsFactors = FALSE)
   cd_vars <- intersect(names(cd), names(df))
   if (length(chs) > 2) {
-    df <- melt(df, id.vars = unique(c(chs[1], cd_vars)))
+    df <- reshape2::melt(df, id.vars = unique(c(chs[1], cd_vars)))
     facet <- "variable"
     ylab <- ylab(NULL)
     chs[2] <- "value"
