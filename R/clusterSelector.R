@@ -415,6 +415,7 @@ clusterSelector <- function(sce, # main input has to contain:
         ),
         ### Violin plots  ----
         shinydashboardPlus::box(
+          id = "violinBox",
           title = "violin plots", solidHeader = TRUE, width = 12, status = "primary",
           collapsible = TRUE, collapsed = TRUE,
           fluidRow(column(width = 12),
@@ -431,6 +432,7 @@ clusterSelector <- function(sce, # main input has to contain:
         ),
         ### Upset Plots ----
         shinydashboardPlus::box(
+          id = "upsetBox",
           title = "UpSet plot", solidHeader = TRUE, width = 12, status = "primary",
           collapsible = TRUE, collapsed = TRUE,
           fluidRow(column(width = 12),
@@ -1698,6 +1700,7 @@ output$VlnPlot = renderPlot({
 })
 vlnPlot <- reactive({
   cat(file = stderr(), "VlnPlot\n")
+  req(input$violinBox)  # only compute while violin box is expanded
 
   # observe
   # this changes the groups
@@ -1760,6 +1763,7 @@ output$VlnPlot2 = renderPlot({
 
 VlnPlot2 = reactive({
   cat(file = stderr(), "VlnPlot2\n")
+  req(input$violinBox)  # only compute while violin box is expanded
   # observe
   # this changes the groups
   input$applyName
@@ -1800,6 +1804,7 @@ shiny::observe({
 
 upSetPlot = reactive({
   cat(file = stderr(), "UpSet: ","\n")
+  req(input$upsetBox)  # only compute while UpSet box is expanded
   # inputList = reactiveValuesToList(input)
   # save(file = "UpSet.RData", list = c(ls()))
   # cp = load("UpSet.RData")
