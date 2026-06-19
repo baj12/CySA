@@ -21,7 +21,7 @@
 #' @importFrom tidyr pivot_longer
 #' @importFrom tibble as_tibble
 #' @importFrom data.table rbindlist
-#' @importFrom purrr map2 set_names imap
+#' @importFrom purrr map2 set_names imap is_empty
 #' @importFrom plotly renderPlotly plotlyOutput ggplotly layout event_register event_data add_trace config
 #' @importFrom DT renderDT DTOutput
 #' @importFrom collapsibleTree collapsibleTreeOutput renderCollapsibleTree
