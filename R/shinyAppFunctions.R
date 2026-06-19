@@ -233,28 +233,27 @@ tsneFunc <- function(dimRedSelection, perplexity, sce, somCodesName = "SOM_codes
 
 
 plotViolinFunc <- function(sce, somCodesName = "SOM_codes", upsetSelection, outputList, violinSelection) {
-  markers = colnames(sce@metadata[[somCodesName]])
+  somCodes <- sce@metadata[[somCodesName]]
+  markers = colnames(somCodes)
   if(length(upsetSelection)<3)
     upsetSelection = names(outputList)
   markers = intersect(markers, violinSelection)
-  data = data.frame(
-    somNode = factor(levels = upsetSelection),
-    marker = factor(levels = markers),
-    expr = double(),
-    grpName = factor(levels = upsetSelection)
-
-  )
-  for( na in upsetSelection){
-    wide = sce@metadata[[somCodesName]][outputList[[na]],markers,drop=FALSE] %>% as.data.frame()
-    if(nrow(wide)<2)next()
-    if(any(outputList[[na]] ==0)){
-      outputList[[na]] = outputList[[na]][-which(outputList[[na]] ==0)]
-    }
-
-    wide$somNode = factor(outputList[[na]], levels = 1:nrow(sce@metadata[[somCodesName]]))
-    long = gather(wide, marker,expr,-somNode, factor_key=TRUE)
-    long$grpName = na
-    data = rbind(data, long)
+  nNodes <- nrow(somCodes)
+  parts <- lapply(upsetSelection, function(na) {
+    rows <- outputList[[na]]
+    rows <- rows[rows != 0]
+    if (length(rows) < 2) return(NULL)
+    wide <- as.data.frame(somCodes[rows, markers, drop = FALSE])
+    wide$somNode <- factor(rows, levels = seq_len(nNodes))
+    long <- tidyr::pivot_longer(wide, cols = markers,
+                                names_to = "marker", values_to = "expr")
+    long$grpName <- na
+    long
+  })
+  data <- data.table::rbindlist(parts)
+  if (nrow(data) > 0) {
+    data$marker <- factor(data$marker, levels = markers)
+    data$grpName <- factor(data$grpName, levels = upsetSelection)
   }
   if(nrow(data)>10){
     nb.cols <- length(unique(data$marker))
@@ -357,28 +356,27 @@ drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
 
 plotViolin2Func <- function(sce, somCodesName = "SOM_codes", violinSelection, upsetSelection, outputList) {
 
-  markers = colnames(sce@metadata[[somCodesName]])
+  somCodes <- sce@metadata[[somCodesName]]
+  markers = colnames(somCodes)
   markers = intersect(markers, violinSelection)
   if(length(upsetSelection)<3)
     upsetSelection = names(outputList)
-  data = data.frame(
-    somNode = factor(levels = upsetSelection),
-    marker = factor(levels = markers),
-    expr = double(),
-    grpName = factor(levels = upsetSelection)
-
-  )
-  for( na in upsetSelection){
-    if(length(outputList[[na]])==0)next()
-    wide = sce@metadata[[somCodesName]][outputList[[na]],markers,drop=FALSE] %>% as.data.frame()
-    if(nrow(wide)<2)next()
-    if(any(outputList[[na]] ==0)){
-      outputList[[na]] = outputList[[na]][-which(outputList[[na]] ==0)]
-    }
-    wide$somNode = factor(outputList[[na]], levels = 1:nrow(sce@metadata[[somCodesName]]))
-    long = gather(wide, marker,expr,-somNode, factor_key=TRUE)
-    long$grpName = na
-    data = rbind(data, long)
+  nNodes <- nrow(somCodes)
+  parts <- lapply(upsetSelection, function(na) {
+    rows <- outputList[[na]]
+    rows <- rows[rows != 0]
+    if (length(rows) < 2) return(NULL)
+    wide <- as.data.frame(somCodes[rows, markers, drop = FALSE])
+    wide$somNode <- factor(rows, levels = seq_len(nNodes))
+    long <- tidyr::pivot_longer(wide, cols = markers,
+                                names_to = "marker", values_to = "expr")
+    long$grpName <- na
+    long
+  })
+  data <- data.table::rbindlist(parts)
+  if (nrow(data) > 0) {
+    data$marker <- factor(data$marker, levels = markers)
+    data$grpName <- factor(data$grpName, levels = upsetSelection)
   }
   nb.cols <- length(unique(data$grpName))
   mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
