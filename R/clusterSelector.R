@@ -72,7 +72,7 @@ clusterSelector <- function(sce, # main input has to contain:
   jscode <- "shinyjs.closeWindow = function() { window.close(); }"
 
   if("outputList" %in% ls(envir = env)){
-    outputList = rv$outputList
+    outputList = get("outputList", envir = env)
   }
   outputList[["Rest"]] = c()
   outputList[["Rest"]] = as.integer(levels(sce$cluster_id)[!levels(sce$cluster_id) %in% unique(unlist(outputList))])
@@ -102,7 +102,7 @@ clusterSelector <- function(sce, # main input has to contain:
   })
   names(channelLimits) <- rownames(sce)
 
-  rv$outputList = outputList
+  assign(x = "outputList", value = outputList, envir = env)
 
   # nPlots = 15
   # nPlots = 6
