@@ -21,7 +21,6 @@
 #' @import dendextend
 #' @import viridis
 #' @import cowplot
-#' @import ggthemr
 #' @import ggplotify
 #' @import grid
 #' @importFrom plotly renderPlotly plotlyOutput ggplotly layout event_register event_data add_trace config

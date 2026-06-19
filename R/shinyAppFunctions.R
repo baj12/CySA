@@ -297,7 +297,6 @@ drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
   df$mean = S4Vectors::metadata(sce)$SOM_stats$mean
   df$thrdQu = S4Vectors::metadata(sce)$SOM_stats$rdQu
   df$max = S4Vectors::metadata(sce)$SOM_stats$max
-  ggthemr('flat')
   nGrps = 1
   if(length(colorbyGroups)<1){
     colGrp = "lightblue"
@@ -313,7 +312,6 @@ drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
     nGrps = length(levels(df$colGrp))
     nb.cols <- nGrps + 1
     mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
-    set_swatch(mycolors)
   }
   # browser()
   p3 = ggplot(data = df,
@@ -328,7 +326,8 @@ drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
   if(nGrps==1){
     p3 = p3 +geom_point(show.legend = sl, color="lightblue")
   } else{
-    p3 = p3 + geom_point(show.legend = sl, aes(color=colGrp))
+    p3 = p3 + geom_point(show.legend = sl, aes(color=colGrp)) +
+      scale_color_manual(values = mycolors[seq_len(nGrps)])
   }
 
   p3 = p3 +
@@ -337,8 +336,10 @@ drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
                    y=.data[[colN[2]]],
                    customdata=rs),
                color='red',
-               size=0.3)
-  p3 = p3 + theme(legend.position="bottom") + guides(colour = guide_legend(nrow = as.integer(nGrps/3+1),title = ""))
+               size=0.3) +
+    theme_minimal() +
+    theme(legend.position="bottom") +
+    guides(colour = guide_legend(nrow = as.integer(nGrps/3+1),title = ""))
 
   return(p3)
 }

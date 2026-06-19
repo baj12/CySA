@@ -40,7 +40,6 @@ Imports:
     dendextend,
     ComplexHeatmap,
     cowplot,
-    ggthemr,
     ggplotify,
     Rtsne,
     umap,
