@@ -1436,8 +1436,8 @@ tsne <- reactive({
   tsne = tsneFunc(dimRedSelection = dimRedCols, perplexity = perplexity, sce, somCodesName)
   return(tsne)
 }) %>%
-  debounce(1000) %>%
-  bindCache(dimRedSelection(), input$perplexity)
+  bindCache(dimRedSelection(), input$perplexity) %>%
+  debounce(1000)
 
 umap <- reactive({
   seed = 1
@@ -1448,8 +1448,8 @@ umap <- reactive({
   um = umap::umap(metaD[[somCodesName]][,dimRedCols],config = pumap)
   return(um)
 }) %>%
-  debounce(1000) %>%
-  bindCache(input$dimRedSelection, input$n_neighbors)
+  bindCache(input$dimRedSelection, input$n_neighbors) %>%
+  debounce(1000)
 
 pca <- reactive({
   seed = 1
@@ -1458,8 +1458,8 @@ pca <- reactive({
   pca = prcomp(t(metaD[[somCodesName]][,dimRedCols]), scale =F,rank. = 2)
   return(pca)
 }) %>%
-  debounce(1000) %>%
-  bindCache(input$dimRedSelection)
+  bindCache(input$dimRedSelection) %>%
+  debounce(1000)
 
 output$tsne <- renderPlotly({
   p3 = tsnePlot()
