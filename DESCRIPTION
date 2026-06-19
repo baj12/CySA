@@ -1,0 +1,55 @@
+Package: CySA
+Title: Interactive Cluster Selector for Cytometry Data
+Version: 0.0.0.9000
+Authors@R:
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+Description: Provides an interactive Shiny application for selecting and
+    visualizing clusters from flow cytometry data stored in
+    SingleCellExperiment objects. Extracted from the CyDa workflow tools.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.0.0
+Depends:
+    R (>= 4.0.0)
+Imports:
+    shiny,
+    shinydashboard,
+    shinydashboardPlus,
+    shinyjs,
+    shinyjqui,
+    htmltools,
+    SingleCellExperiment,
+    S4Vectors,
+    SummarizedExperiment,
+    Matrix,
+    RColorBrewer,
+    CATALYST,
+    dplyr,
+    tidyr,
+    tibble,
+    data.table,
+    stringr,
+    purrr,
+    reshape2,
+    rlang,
+    raster,
+    ggplot2,
+    plotly,
+    viridis,
+    dendextend,
+    ComplexHeatmap,
+    cowplot,
+    ggthemr,
+    ggplotify,
+    Rtsne,
+    umap,
+    raster,
+    DT,
+    collapsibleTree
+Suggests:
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr

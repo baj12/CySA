@@ -1,0 +1,19 @@
+.Rproj.user
+inst/doc
+docs
+
+# Secrets and local environment
+.env
+
+# Local agent / editor config
+CLAUDE.md
+opencode.json
+.claude/
+open.ai.thoughts.txt
+
+# R / OS artifacts
+.Rhistory
+.DS_Store
+
+# Generated profile outputs
+*.Rprofvis
