@@ -82,7 +82,7 @@ plotScatterBJ <- function (x, chs, gate = NULL, color_by = NULL, facet_by = NULL
       scales <- scale_fill_gradientn(trans = "sqrt", colors = c("navy", 
                                                                 rev(brewer.pal(11, "Spectral"))))
     }
-    geom <- geom_bin2d(bins = bins, na.rm = TRUE, show.legend = FALSE)
+    geom <- geom_tile(stat = "bin2d", bins = bins, na.rm = TRUE, show.legend = FALSE)
   } else {
     fill_var <- NULL
     col_var <- sprintf("`%s`", color_by)

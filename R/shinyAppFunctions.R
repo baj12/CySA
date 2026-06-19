@@ -150,13 +150,15 @@ PercentBarPlotFunc <- function(sce, relativeToCol, clusterPatientTable, rs, outp
 
 
 
-ggsomPlot <- function(pp1, plotIdx, rs, dimSelection, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce)){
+ggsomPlot <- function(pp1, plotIdx, rs, dimSelection, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), xlim = NULL, ylim = NULL){
   newData = highlight_df(dimSelection[[plotIdx]]$dims[1],dimSelection[[plotIdx]]$dims[2], rs, somCodesName, metaD = metaD)
   p3 = pp1 + geom_point(data=newData,
                         aes(x=`x`,y=`y`, customdata = rs),
                         color='red',
                         size=0.3)
-  if (is.null(dimSelection[[plotIdx]]$xzoom[1])){
+  if (!is.null(xlim) && !is.null(ylim)) {
+    p3 = p3 + xlim(xlim) + ylim(ylim)
+  } else if (is.null(dimSelection[[plotIdx]]$xzoom[1])){
     # cat(file = stderr(), plotIdx, "xlim\n")
 
     p3 = p3 +
@@ -175,7 +177,7 @@ ggsomPlot <- function(pp1, plotIdx, rs, dimSelection, somCodesName = "SOM_codes"
   return(p3)
 }
 
-somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = NULL, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), outputList = list(), projectionDf = NULL){
+somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = NULL, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), outputList = list(), projectionDf = NULL, xlim = NULL, ylim = NULL){
   if(is.null(pp1)) return(NULL)
 
   # cp =load(file = "/pasteur/appa/scratch/bernd/dev.RData")
@@ -195,7 +197,9 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = 
   }
 
   if(is.null(p3)) return(NULL)
-  if (is.null(dimSelection[[plotIdx]]$xzoom[1])){
+  if (!is.null(xlim) && !is.null(ylim)) {
+    p3 = p3 + xlim(xlim) + ylim(ylim)
+  } else if (is.null(dimSelection[[plotIdx]]$xzoom[1])){
     p3 = p3 +
       xlim(c(dimSelection[[plotIdx]]$xlim[1] %>% as.numeric() ,
              dimSelection[[plotIdx]]$xlim[2] %>% as.numeric() )) +
@@ -304,6 +308,14 @@ buildProjectionDf <- function(pp1, plotIdx, dimSelection, sce) {
 
 drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
   colN = names(df)[1:2]
+  if (!"id" %in% names(df)) {
+    df$id <- seq_len(nrow(df))
+    df <- dplyr::left_join(df, S4Vectors::metadata(sce)$SOM_stats, by = "id")
+  }
+  # Normalise SOM_stats column names to what the tooltip expects.
+  if ("n" %in% names(df) && !"N" %in% names(df)) df$N <- df$n
+  if ("rdQu" %in% names(df) && !"thrdQu" %in% names(df)) df$thrdQu <- df$rdQu
+  if ("thirdQu" %in% names(df) && !"thrdQu" %in% names(df)) df$thrdQu <- df$thirdQu
   df$cluster = df$id
   # N, mean, thrdQu, max are already in df from SOM_stats
   nGrps = 1

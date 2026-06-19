@@ -15,3 +15,6 @@
 ^open.ai.thoughts.txt$
 ^opencode.json$
 ^\.env$
+^.DS_Store$
+^Rplots.pdf$
+^test.app.R$

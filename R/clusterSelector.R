@@ -12,7 +12,8 @@ utils::globalVariables(c(
   "umapPlot", "pcaPlot", "scatterPlot", "somRasterPlot",
   "vlnPlot", "VlnPlot2", "upSetPlot", "selectedUpdate", "selectedUpdate2",
   "sample2PlotDb", "choicesRV",
-  "sample_id", "group", "val", "somNode", "N", "thrdQu"
+  "sample_id", "group", "val", "somNode", "N", "thrdQu",
+  "scatterPercentile", "somRasterColorVar", "somRasterSizeVar"
 ))
 
 #' Cluster Selector Shiny Application
@@ -93,17 +94,26 @@ clusterSelector <- function(sce, # main input has to contain:
   somRasterData = somRasterData[,c("x", "y", metaD$map$colsUsed)]
   somRasterObj = somRasterObj[[metaD$map$colsUsed]]
 
-  # Pre-render the static SOM raster background once and record it.
-  # The overlay (selected nodes) is added per-render, avoiding repeated
-  # expensive raster::plot() calls every time rs changes.
-  baseRasterPlot <- NULL
-  if (!is.null(somRasterObj)) {
-    tmpRasterFile <- tempfile(fileext = ".png")
-    grDevices::png(tmpRasterFile, width = 1200, height = 1200)
-    tryCatch({
-      raster::plot(somRasterObj, maxnl = 80)
-      baseRasterPlot <- grDevices::recordPlot()
-    }, finally = grDevices::dev.off())
+  # Pre-build the SOM raster heatmap as a ggplot object once.
+  # The overlay (selected nodes) is added per-render as ggplot layers.
+  # Using ggplot avoids the lattice/base-graphics incompatibility that
+  # broke the previous recordPlot/replayPlot approach.
+  baseRasterGgplot <- NULL
+  if (!is.null(somRasterData)) {
+    raster_long <- tidyr::pivot_longer(
+      somRasterData,
+      cols = c(-"x", -"y"),
+      names_to = "marker",
+      values_to = "value"
+    )
+    marker_cols <- setdiff(names(somRasterData), c("x", "y"))
+    raster_long$marker <- factor(raster_long$marker, levels = marker_cols)
+    baseRasterGgplot <- ggplot(raster_long, aes(x = x, y = y, fill = value)) +
+      geom_raster() +
+      facet_wrap(~ marker) +
+      scale_fill_viridis() +
+      coord_fixed() +
+      theme_minimal()
   }
 
   # Pre-compute per-channel axis limits once from the full assay matrix.
@@ -179,12 +189,23 @@ clusterSelector <- function(sce, # main input has to contain:
                              selected = "view",
                              inline = FALSE
                            ),
-                           selectInput("samples2plot",
-                                       paste0("samples to plot"),
-                                       choices = levels(sce$sample_id),
-                                       selected = levels(sce$sample_id),
-                                       multiple = T,selectize = T),
-                           textInput("clusterNumbers",
+                            selectInput("samples2plot",
+                                        paste0("samples to plot"),
+                                        choices = levels(sce$sample_id),
+                                        selected = levels(sce$sample_id),
+                                        multiple = T,selectize = T),
+                            sliderInput("scatterPercentile",
+                                        "Scatter auto-zoom percentile",
+                                        min = 0.5, max = 1, value = 0.99, step = 0.01),
+                            selectInput("somRasterColorVar",
+                                        "SOM raster color by",
+                                        choices = c("fixed", "n", "mean", "median", "rdQu", "max"),
+                                        selected = "fixed", multiple = FALSE),
+                            selectInput("somRasterSizeVar",
+                                        "SOM raster size by",
+                                        choices = c("fixed", "n", "mean", "median", "rdQu", "max"),
+                                        selected = "fixed", multiple = FALSE),
+                            textInput("clusterNumbers",
                                      "cluster numbers",
                                      value = "1",
                                      width = NULL,
@@ -1402,9 +1423,19 @@ lapply(seq_len(nPlots), function(i) {
       plotIdx <- if (plotIdxLocal == 6) activePlot() else plotIdxLocal
       pp1 <- somBasePlots[[plotIdx]]()
       projectionDf <- if (showGroups) projectionDfs[[plotIdx]]() else NULL
+
+      pctl <- input$scatterPercentile
+      if (is.null(pctl)) pctl <- 0.99
+      tailP <- (1 - pctl) / 2
+      somCodes <- metaD[[somCodesName]]
+      dims <- dimSelection[[plotIdx]]$dims
+      xlimP <- if (dims[1] %in% colnames(somCodes)) quantile(somCodes[, dims[1]], probs = c(tailP, 1 - tailP), na.rm = TRUE) else NULL
+      ylimP <- if (dims[2] %in% colnames(somCodes)) quantile(somCodes[, dims[2]], probs = c(tailP, 1 - tailP), na.rm = TRUE) else NULL
+
       p3 <- somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups,
                     dimSelection = dimSelection, sce = sce, metaD = metaD,
-                    outputList = rv$outputList, projectionDf = projectionDf)
+                    outputList = rv$outputList, projectionDf = projectionDf,
+                    xlim = xlimP, ylim = ylimP)
       ggplotly(p3, source = paste0("somData", plotIdxLocal), tooltip = "") %>%
         layout(showlegend = F, dragmode = "select") %>%
         config(renderer = "webgl") %>%
@@ -1613,13 +1644,19 @@ output$scatter <- renderPlotly({
   if(length(cidIdx)<1)return(NULL)
 
   pp = scatterPlot()
-  # here we add a grid for selecting points
-  minx = df[cidIdx,dimSelection[[plotIdx]]$dims[1] %>% make.names()] %>% min()
-  maxx =  df[cidIdx,dimSelection[[plotIdx]]$dims[1] %>% make.names()] %>% max()
-  xpoints = seq(from = minx, to=maxx, length=100) %>% rep(100) %>% sort()
-  miny = df[cidIdx,dimSelection[[plotIdx]]$dims[2] %>% make.names()] %>% min()
-  maxy =  df[cidIdx,dimSelection[[plotIdx]]$dims[2] %>% make.names()] %>% max()
-  ypoints = seq(from = miny, to=maxy, length=100)%>% rep(100)
+  # here we add a grid for selecting points, spanning the current percentile zoom
+  chs <- dimSelection[[plotIdx]]$dims
+  chx <- make.names(chs[1])
+  chy <- make.names(chs[2])
+  xVals <- df[cidIdx, chx, drop = TRUE]
+  yVals <- df[cidIdx, chy, drop = TRUE]
+  pctl <- input$scatterPercentile
+  if (is.null(pctl)) pctl <- 0.99
+  tailP <- (1 - pctl) / 2
+  xlimP <- quantile(xVals, probs = c(tailP, 1 - tailP), na.rm = TRUE)
+  ylimP <- quantile(yVals, probs = c(tailP, 1 - tailP), na.rm = TRUE)
+  xpoints = seq(from = xlimP[1], to = xlimP[2], length = 100) %>% rep(100) %>% sort()
+  ypoints = seq(from = ylimP[1], to = ylimP[2], length = 100) %>% rep(100)
   # browser()
   pp = ggplotly(pp, source = "scatterPlot") %>% add_trace(
     x = xpoints,
@@ -1645,19 +1682,30 @@ scatterPlot <- reactive({
   dimSelection =  dimSelection()
   sampleIds = input$samples2plot
   req(sampleIds)
-  browser()
+  # browser()
   plotIdx = activePlot()
   req(dimSelection, length(dimSelection) >= plotIdx)
   cidIdx = colData(sce_subsampled)$cluster_id %in% rs & colData(sce_subsampled)$sample_id %in% sampleIds
   if(sum(cidIdx) < 1) return(NULL)
+
+  chs <- dimSelection[[plotIdx]]$dims
+  chx <- make.names(chs[1])
+  chy <- make.names(chs[2])
+  xVals <- df[cidIdx, chx, drop = TRUE]
+  yVals <- df[cidIdx, chy, drop = TRUE]
+
+  pctl <- input$scatterPercentile
+  if (is.null(pctl)) pctl <- 0.99
+  tailP <- (1 - pctl) / 2
+  xlimP <- quantile(xVals, probs = c(tailP, 1 - tailP), na.rm = TRUE)
+  ylimP <- quantile(yVals, probs = c(tailP, 1 - tailP), na.rm = TRUE)
+
   pp = plotScatterBJ(rowNames = sce_subsampledRN,
                      x = sce_subsampled[,cidIdx],
-                     chs = c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
+                     chs = chs,
                      bins = 200) +
-    xlim(c((dimSelection[[plotIdx]]$xlim[1] %>% as.numeric() %>% sign()) * (dimSelection[[plotIdx]]$xlim[1] %>% as.numeric() %>% abs() %>% ceiling()),
-           (dimSelection[[plotIdx]]$xlim[2] %>% as.numeric() %>% sign()) * (dimSelection[[plotIdx]]$xlim[2] %>% as.numeric() %>% ceiling()))) +
-    ylim(c((dimSelection[[plotIdx]]$ylim[1] %>% as.numeric() %>% sign()) * (dimSelection[[plotIdx]]$ylim[1] %>% as.numeric() %>% abs() %>% ceiling()),
-           (dimSelection[[plotIdx]]$ylim[2] %>% as.numeric() %>% sign()) * (dimSelection[[plotIdx]]$ylim[2] %>% as.numeric() %>% ceiling())))
+    xlim(xlimP) +
+    ylim(ylimP)
 
   return(pp)
 })
@@ -1667,10 +1715,23 @@ scatterPlot <- reactive({
 output$somRaster = renderPlot({
   xy = somRasterPlot()
   req(xy)
-  req(baseRasterPlot)
-  grDevices::replayPlot(baseRasterPlot)
-  points(xy, cex = 2)
-  points(xy, pch = 3, col = 'red')
+  req(baseRasterGgplot)
+  colorVar <- input$somRasterColorVar
+  sizeVar <- input$somRasterSizeVar
+  if (is.null(colorVar)) colorVar <- "fixed"
+  if (is.null(sizeVar)) sizeVar <- "fixed"
+
+  stats_df <- as.data.frame(metaD$SOM_stats)
+  xy <- dplyr::left_join(xy, stats_df, by = "id")
+
+  aes_args <- ggplot2::aes(x = x, y = y)
+  if (colorVar != "fixed") aes_args$colour <- as.name(colorVar)
+  if (sizeVar != "fixed") aes_args$size <- as.name(sizeVar)
+  pt_args <- list(data = xy, mapping = aes_args, inherit.aes = FALSE)
+  if (colorVar == "fixed") pt_args$color <- "red"
+  if (sizeVar == "fixed") pt_args$size <- 1
+
+  baseRasterGgplot + do.call(geom_point, pt_args)
 })
 
 # somRasterSelect ----
@@ -1701,7 +1762,9 @@ somRasterPlot = reactive({
 
   rs = rsUsed()
   req(rs)
-  somRasterData[rs, c("x", "y"), drop = FALSE]
+  xy <- somRasterData[rs, c("x", "y"), drop = FALSE]
+  xy$id <- rs
+  xy
 })
 
 ## VlnPlot ----
@@ -1709,10 +1772,12 @@ somRasterPlot = reactive({
 output$VlnPlot = renderPlot({
   vlnPlot()
 })
+shiny::observe({
+  cat(file = stderr(), "violinSelection:", paste(input$violinSelection, collapse = ","), "\n")
+})
 vlnPlot <- reactive({
   cat(file = stderr(), "VlnPlot\n")
-  req(input$violinBox)  # only compute while violin box is expanded
-
+  # req(input$violinBox)  # only compute while violin box is expanded
   # observe
   # this changes the groups
   input$applyName
@@ -1720,7 +1785,9 @@ vlnPlot <- reactive({
   violinSelection = violinPlotSelection()
   upsetSelection = input$upsetSelection
   outputList = rv$outputList
+
   req(outputList)
+
   # save(file = "vln.Rdata", list=ls())
   ##                  Cell Idents  Feat     Expr
   # Idents = named groups of clusters
@@ -1767,6 +1834,7 @@ vlnPlot <- reactive({
           axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     scale_fill_manual(values = mycolors) +
     ggtitle("Marker on x-axis") + xlab("Marker") + ylab("Expression Level")
+
   p
 })
 ## VlnPlot2 ----
@@ -1777,7 +1845,7 @@ output$VlnPlot2 = renderPlot({
 
 VlnPlot2 = reactive({
   cat(file = stderr(), "VlnPlot2\n")
-  req(input$violinBox)  # only compute while violin box is expanded
+  # req(input$violinBox)  # only compute while violin box is expanded
   # observe
   # this changes the groups
   input$applyName
@@ -1818,7 +1886,7 @@ shiny::observe({
 
 upSetPlot = reactive({
   cat(file = stderr(), "UpSet: ","\n")
-  req(input$upsetBox)  # only compute while UpSet box is expanded
+  # req(input$upsetBox)  # only compute while UpSet box is expanded
   # inputList = reactiveValuesToList(input)
   # save(file = "UpSet.RData", list = c(ls()))
   # cp = load("UpSet.RData")
@@ -1858,14 +1926,21 @@ output$downloadPlots <- downloadHandler(
     print(PercentBarPlot())
 
 
+    pctl <- input$scatterPercentile
+    if (is.null(pctl)) pctl <- 0.99
+    tailP <- (1 - pctl) / 2
+    somCodes <- metaD[[somCodesName]]
     for(plotIdx in seq(nPlots)){
       message("printing somScatter", plotIdx)
+      dims <- dimSelection[[plotIdx]]$dims
       pp1 = plotSOMScatter(x=sce,
-                           chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
+                           chs=c(dims[1], dims[2]),
                            pointSize = "max",
                            color_by ="n",xRN = sceRN, xCN = sceCN ) +
         scale_colour_gradientn(colours=viridis::viridis(9))
-      print(ggsomPlot(pp1, plotIdx, rs, dimSelection, sce=sce, metaD = metaD))
+      xlimP <- if (dims[1] %in% colnames(somCodes)) quantile(somCodes[, dims[1]], probs = c(tailP, 1 - tailP), na.rm = TRUE) else NULL
+      ylimP <- if (dims[2] %in% colnames(somCodes)) quantile(somCodes[, dims[2]], probs = c(tailP, 1 - tailP), na.rm = TRUE) else NULL
+      print(ggsomPlot(pp1, plotIdx, rs, dimSelection, sce=sce, metaD = metaD, xlim = xlimP, ylim = ylimP))
     }
     message("printing tsnePlot")
     print(tsnePlot())
@@ -1877,16 +1952,42 @@ output$downloadPlots <- downloadHandler(
     message("printing scatterPlot")
     print(scatterPlot())
     message("printing somRasterPlot")
-    res = somRasterPlot()
-    raster::plot(res[[1]], addfun = res[[2]], maxnl=80)
+    xy <- somRasterPlot()
+    if (!is.null(xy) && !is.null(baseRasterGgplot)) {
+      colorVar <- input$somRasterColorVar
+      sizeVar <- input$somRasterSizeVar
+      if (is.null(colorVar)) colorVar <- "fixed"
+      if (is.null(sizeVar)) sizeVar <- "fixed"
+
+      stats_df <- as.data.frame(metaD$SOM_stats)
+      xy <- dplyr::left_join(xy, stats_df, by = "id")
+
+      aes_args <- ggplot2::aes(x = x, y = y)
+      if (colorVar != "fixed") aes_args$colour <- as.name(colorVar)
+      if (sizeVar != "fixed") aes_args$size <- as.name(sizeVar)
+      pt_args <- list(data = xy, mapping = aes_args, inherit.aes = FALSE)
+      if (colorVar == "fixed") pt_args$color <- "red"
+      if (sizeVar == "fixed") pt_args$size <- 1
+
+      print(baseRasterGgplot + do.call(geom_point, pt_args))
+    }
 
     message("printing vlnPlot")
-    print(vlnPlot())
+    dlOutputList <- rv$outputList
+    dlUpsetSel <- input$upsetSelection
+    dlViolinSel <- input$violinSelection
+    if (length(dlUpsetSel) < 3) dlUpsetSel <- names(dlOutputList)
+    if (is.null(dlViolinSel)) dlViolinSel <- colsUsed
+    pVln <- plotViolinFunc(sce, somCodesName, dlUpsetSel, dlOutputList, dlViolinSel)
+    if (!is.null(pVln)) print(pVln)
 
     message("printing VlnPlot2")
-    print(VlnPlot2())
+    pVln2 <- plotViolin2Func(sce, somCodesName, dlViolinSel, dlUpsetSel, dlOutputList)
+    if (!is.null(pVln2)) print(pVln2)
+
     message("printing upSetPlot")
-    print(upSetPlot())
+    pUpset <- upsetPlotFunc(dlUpsetSel, dlOutputList, sce)
+    if (!is.null(pUpset)) print(pUpset)
     dev.off()
     message("done printing")
   }
@@ -1962,4 +2063,3 @@ shiny::observe({
 
 
 
-  
