@@ -1125,7 +1125,7 @@ output$cellCounts <- DT::renderDT(options = list(lengthChange = FALSE,
 
 # countBar ----
 output$CountBar <-renderPlot({
-  print(countBarPlot())
+  countBarPlot()
 })
 
 countBarPlot <- reactive({
@@ -1183,7 +1183,7 @@ output$cellPercentages <- renderPrint({
 
 #PercentBar ----
 output$PercentBar <-renderPlot({
-  print(PercentBarPlot())
+  PercentBarPlot()
 })
 
 PercentBarPlot <- reactive({
@@ -1729,7 +1729,7 @@ somRasterPlot = reactive({
 ## VlnPlot ----
 
 output$VlnPlot = renderPlot({
-  print(vlnPlot())
+  vlnPlot()
 })
 vlnPlot <- reactive({
   cat(file = stderr(), "VlnPlot\n")
@@ -1789,7 +1789,7 @@ vlnPlot <- reactive({
 })
 ## VlnPlot2 ----
 output$VlnPlot2 = renderPlot({
-  print(VlnPlot2())
+  VlnPlot2()
 })
 
 
@@ -1821,7 +1821,7 @@ shiny::observeEvent(input$close, {
 
 ## upset plot ----
 output$UpSet = renderPlot({
-  print(upSetPlot())
+  upSetPlot()
 })
 
 selectedUpdate <- reactiveVal(value=0)
