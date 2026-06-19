@@ -1644,10 +1644,12 @@ scatterPlot <- reactive({
   req(rs)
   dimSelection =  dimSelection()
   sampleIds = input$samples2plot
+  req(sampleIds)
   browser()
   plotIdx = activePlot()
+  req(dimSelection, length(dimSelection) >= plotIdx)
   cidIdx = colData(sce_subsampled)$cluster_id %in% rs & colData(sce_subsampled)$sample_id %in% sampleIds
-  if(length(cidIdx)<1)return(NULL)
+  if(sum(cidIdx) < 1) return(NULL)
   pp = plotScatterBJ(rowNames = sce_subsampledRN,
                      x = sce_subsampled[,cidIdx],
                      chs = c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
