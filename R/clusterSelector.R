@@ -1898,8 +1898,10 @@ shiny::observe({
   for(idx in 1:nPlots){
     d1 <- input[[paste0("d",idx,".1")]]
     d2 <- input[[paste0("d",idx,".2")]]
+    req(d1, d2)
     lim1 <- channelLimits[[d1]]
     lim2 <- channelLimits[[d2]]
+    req(lim1, lim2)
     dimSelection[[idx]] = list(
       dims = c(d1, d2),
       xlim = c(lim1["min"], lim1["max"]),
