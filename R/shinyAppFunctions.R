@@ -175,7 +175,7 @@ ggsomPlot <- function(pp1, plotIdx, rs, dimSelection, somCodesName = "SOM_codes"
   return(p3)
 }
 
-somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = NULL, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), env = parent.frame()){
+somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = NULL, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), outputList = list()){
   if(is.null(pp1)) return(NULL)
 
   # cp =load(file = "/pasteur/appa/scratch/bernd/dev.RData")
@@ -191,7 +191,6 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = 
     df = df2[order(df2$id),c("x", "y")]
     df[is.na(df)] = 0
     colnames(df) = c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2])
-    outputList <- get("outputList", envir = env)
     p3 = drawProjection(df, rs, colorbyGroups = colorbyGroups, sce = sce, outputList = outputList)
   } else {
     p3 = pp1 + geom_point(data=highlight_df(dimSelection[[plotIdx]]$dims[1],dimSelection[[plotIdx]]$dims[2], rs, somCodesName, metaD = metaD),

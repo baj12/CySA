@@ -72,7 +72,7 @@ clusterSelector <- function(sce, # main input has to contain:
   jscode <- "shinyjs.closeWindow = function() { window.close(); }"
 
   if("outputList" %in% ls(envir = env)){
-    outputList = get("outputList", envir = env)
+    outputList = rv$outputList
   }
   outputList[["Rest"]] = c()
   outputList[["Rest"]] = as.integer(levels(sce$cluster_id)[!levels(sce$cluster_id) %in% unique(unlist(outputList))])
@@ -102,7 +102,7 @@ clusterSelector <- function(sce, # main input has to contain:
   })
   names(channelLimits) <- rownames(sce)
 
-  assign(x = "outputList", value = outputList, envir = env)
+  rv$outputList = outputList
 
   # nPlots = 15
   # nPlots = 6
@@ -484,6 +484,15 @@ clusterSelector <- function(sce, # main input has to contain:
 
       # force redraw if selected group is used
       selectedUpdate2 <- reactiveVal(value=0)
+
+      # reactiveValues replacement for external env$outputList
+      rv <- reactiveValues(outputList = outputList)
+
+      # Keep external env in sync for callers that still read env$outputList
+      shiny::observe({
+        assign(x = "outputList", value = rv$outputList, envir = env)
+      })
+
       shiny::observe({
         rs = rsUsed_d()
         if("selected" %in% input$colorbyGroups){
@@ -613,7 +622,7 @@ output$axesUI <- renderUI({
 # observe clusterNameSelect ----
 # print clusters based on selection
 shiny::observeEvent(input$clusterNameSelect,{
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   listNames = names(outputList) %in% input$clusterNameSelect
   combinedSoms =  outputList[listNames] %>% unlist() %>% unique()
   updateTextInput(session, "clusterNumbers", value  = paste(combinedSoms, collapse=", "))
@@ -677,7 +686,7 @@ shiny::observe({
   numCols <- unlist(lapply(metaD$experiment_info, is.numeric), use.names = FALSE)
   expInfo = metaD$experiment_info[,numCols, drop=F]
   rownames(expInfo) = metaD$experiment_info$sample_id
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
 
   if(length(rs)<1) empty = TRUE
   if(empty){
@@ -729,10 +738,11 @@ shiny::observe({
 })
 
 # updatedoutputList function ----
-updatedoutputList <- function(outputList){
-  updateSelectInput(session = session, "clusterNameRM", choices = names(outputList))
+updatedoutputList <- function(){
+  ol <- rv$outputList
+  updateSelectInput(session = session, "clusterNameRM", choices = names(ol))
   oldVal = isolate(input$clusterNameSelect)
-  updateSelectInput(session = session, "clusterNameSelect", choices = names(outputList), selected = oldVal)
+  updateSelectInput(session = session, "clusterNameSelect", choices = names(ol), selected = oldVal)
   oldval = input$compareStatsTo
   # expInfo = metaD$experiment_info
   numCols <- unlist(lapply(metaD$experiment_info, is.numeric), use.names = FALSE)
@@ -744,31 +754,31 @@ updatedoutputList <- function(outputList){
     cat(file = stderr(), "some NAs produced 1")
     browser()
   }
-  choices = c("none",colnames(eI), names(outputList))
+  choices = c("none",colnames(eI), names(ol))
   updateSelectInput(session = session, "compareStatsTo", choices = choices, selected = oldval)
   oldval = input$relativeTo
-  choices = c("none",colnames(eI), names(outputList))
+  choices = c("none",colnames(eI), names(ol))
   updateSelectInput(session = session, "relativeTo", choices = choices, selected = oldval)
   oldval = input$upsetSelection
-  updateSelectInput(session = session, "upsetSelection", choices = names(outputList), selected = oldval)
+  updateSelectInput(session = session, "upsetSelection", choices = names(ol), selected = oldval)
   oldval = input$colorbyGroups
-  updateSelectInput(session = session, "colorbyGroups", choices = names(outputList), selected = oldval)
+  updateSelectInput(session = session, "colorbyGroups", choices = names(ol), selected = oldval)
   oldval = input$groupRM
-  updateSelectInput(session = session, "groupRM", choices = names(outputList), selected = oldval)
+  updateSelectInput(session = session, "groupRM", choices = names(ol), selected = oldval)
 
 }
 
 # observe applyclusterNumbers ---
 shiny::observeEvent(input$applyclusterNumbers, {
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   # isolate(input$clusterNumbers)
-  updatedoutputList(outputList)
+  updatedoutputList()
 })
 
 # obs rmGrp ----
 shiny::observeEvent(input$rmGrp,{
   cat(file = stderr(), "obs rmGrp ----\n")
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   cName = input$clusterNameRM
   cList = inputClusterNumber()
   if(cName %in% names(outputList)){
@@ -780,8 +790,8 @@ shiny::observeEvent(input$rmGrp,{
     }
     # outputList = append(outputList, list(cList ))
     # names(outputList)[length(outputList)] = cName
-    assign(x = "outputList", value = outputList, envir = env)
-    updatedoutputList(outputList)
+    rv$outputList = outputList
+    updatedoutputList()
   }
 })
 
@@ -789,10 +799,10 @@ shiny::observeEvent(input$rmGrp,{
 # obs applyName ----
 shiny::observeEvent(input$applyName,{
   cat(file = stderr(), "obs applyName ----\n")
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   cName = input$clusterName
   cList = inputClusterNumber()
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   outputList[[cName]] = cList
   outputList[["Rest"]] = c()
   outputList[["Rest"]] = as.integer(levels(sce$cluster_id)[!levels(sce$cluster_id) %in% unique(unlist(outputList))])
@@ -802,8 +812,8 @@ shiny::observeEvent(input$applyName,{
   # browser()
   # outputList = append(outputList, list(cList ))
   # names(outputList)[length(outputList)] = cName
-  assign(x = "outputList", value = outputList, envir = env)
-  updatedoutputList(outputList)
+  rv$outputList = outputList
+  updatedoutputList()
   currentSelection = input$colorbyGroups
   updateSelectInput(inputId = "colorbyGroups",
                     choices = names(outputList),
@@ -813,7 +823,7 @@ shiny::observeEvent(input$applyName,{
 
 shiny::observeEvent(input$rmGroups,{
   cat(file = stderr(), "obs rmGroups ----\n")
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   rmGroups = input$groupRM
   rmCluster = outputList[rmGroups] %>% unlist() %>% unique()
   rs = rsUsed_d() %>% isolate()
@@ -906,15 +916,15 @@ rsUsed_d <- rsUsed %>% debounce(10000)
 # updateTextInput clusterNumbers ----
 shiny::observe({
   rs= rsUsed() %>% sort
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   updateOL = FALSE
   if(!"selected" %in% names(outputList)){
     updateOL = TRUE
   }
   outputList$selected = rs
-  env$outputList = outputList
+  rv$outputList = outputList
   if(updateOL){
-    updatedoutputList(outputList)
+    updatedoutputList()
   }
   updateTextInput(inputId = "clusterNumbers", value =  paste(rs, collapse = ", ") )
 })
@@ -1070,7 +1080,7 @@ output$cellCounts <- DT::renderDT(options = list(lengthChange = FALSE,
                                     rs <- rsUsed()
                                     req(rs)
 
-                                    outputList = get("outputList", envir = env)
+                                    outputList = rv$outputList
                                     print("cellCounts\n")
 
                                     # browser()
@@ -1132,7 +1142,7 @@ countBarPlot <- reactive({
   cat(file = stderr(), "countBar\n")
   cst = input$compareStatsTo
   # browser()
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   rs <- rsUsed()
   req(rs)
   groupsInput = groupsInput()
@@ -1145,7 +1155,7 @@ countBarPlot <- reactive({
 output$cellPercentages <- renderPrint({
   cat(file = stderr(), "cellPercentages\n")
 
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   rs <- rsUsed()
   req(rs)
 
@@ -1188,7 +1198,7 @@ output$PercentBar <-renderPlot({
 
 PercentBarPlot <- reactive({
   cat(file = stderr(), "PercentBar\n")
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   rs <- rsUsed()
   req(rs)
   req(clusterPatientTable)
@@ -1365,7 +1375,7 @@ lapply(seq_len(nPlots), function(i) {
       plotIdx <- if (plotIdxLocal == 6) activePlot() else plotIdxLocal
       pp1 <- somBasePlots[[plotIdx]]()
       p3 <- somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups,
-                    dimSelection = dimSelection, sce = sce, metaD = metaD, env = env)
+                    dimSelection = dimSelection, sce = sce, metaD = metaD, outputList = rv$outputList)
       ggplotly(p3, source = paste0("somData", plotIdxLocal), tooltip = "") %>%
         layout(showlegend = F, dragmode = "select") %>%
         config(renderer = "webgl") %>%
@@ -1378,7 +1388,7 @@ lapply(seq_len(nPlots), function(i) {
 # color selections ----
 # observeEvent(input,{
 #   currentSelection = input$colorbyGroups
-#   outputList = get("outputList", envir = env)
+#   outputList = rv$outputList
 #   updateSelectInput(inputId = "colorbyGroups",
 #                     choices = names(outputList),
 #                     selected = currentSelection
@@ -1681,7 +1691,7 @@ vlnPlot <- reactive({
   input$rmGrp
   violinSelection = violinPlotSelection()
   upsetSelection = input$upsetSelection
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   req(outputList)
   # save(file = "vln.Rdata", list=ls())
   ##                  Cell Idents  Feat     Expr
@@ -1742,7 +1752,7 @@ VlnPlot2 = reactive({
   input$rmGrp
   upsetSelection = input$upsetSelection
   violinSelection = violinPlotSelection()
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   req(outputList)
   # save(file = "vln.Rdata", list=ls())
   ##                  Cell Idents  Feat     Expr
@@ -1783,7 +1793,7 @@ upSetPlot = reactive({
   input$applyName
   upsetSelection = input$upsetSelection
   input$rmGrp
-  outputList = get("outputList", envir = env)
+  outputList = rv$outputList
   upsetPlotFunc(upsetSelection, outputList, sce)
 
 
