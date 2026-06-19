@@ -1332,113 +1332,47 @@ shiny::observeEvent(event_data("plotly_selected", source = "scatterPlot"),{
 })
 
 
-###   output$somData1 ----
-output$somData1 <- renderPlotly({
-  cat(file = stderr(), "som1\n")
-  colorbyGroups = input$colorbyGroups
-  selectedUpdate2()
-  showGroups = input$showGroups
-  dimSelection = dimSelection()
-
-  # cat(file = stderr(), "output$somData1\n")
-  rs = c(1,2,3,4,8)
-  rs = rsUsed_d()
-  req(rs)
-  triggerRedraw()
-  plotIdx = 1
-  # browser()
-
-  pp1 = plotSOMScatter(x=sce,
-                       chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
-                       pointSize = "max",
-                       color_by ="n",xRN = sceRN, xCN = sceCN ) +
-    scale_colour_gradientn(colours=viridis::viridis(9))
-  # save(file = "/pasteur/appa/scratch/bernd/somData1.Rdata", list = ls())
-  # cp = load("/pasteur/appa/scratch/bernd/somData1.Rdata")
-  somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = dimSelection, sce = sce, metaD = metaD, env = env)
-}
-)
-output$somData2 <- renderPlotly({
-  cat(file = stderr(), "som2\n")
-  colorbyGroups = input$colorbyGroups
-  selectedUpdate2()
-  showGroups = input$showGroups
-
-  rs = rsUsed_d()
-  req(rs)
-  triggerRedraw()
-  plotIdx = 2
-  dimSelection =  dimSelection()
-  pp1 = plotSOMScatter(x=sce,
-                       chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
-                       pointSize = "max",
-                       color_by ="n",xRN = sceRN, xCN = sceCN  ) +
-    scale_colour_gradientn(colours=viridis::viridis(9))
-  somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection, sce = sce, metaD = metaD, env = env)
+###   output$somData* ----
+# Shared base plot for each dimSelection slot, cached per channel pair.
+# This avoids rebuilding plotSOMScatter from scratch for each of the 6 outputs.
+somBasePlots <- lapply(seq_len(nPlots), function(plotIdx) {
+  reactive({
+    dimSel <- dimSelection()
+    req(dimSel)
+    dims <- dimSel[[plotIdx]]$dims
+    plotSOMScatter(x = sce,
+                   chs = c(dims[1], dims[2]),
+                   pointSize = "max",
+                   color_by = "n",
+                   xRN = sceRN, xCN = sceCN) +
+      scale_colour_gradientn(colours = viridis::viridis(9))
+  }) %>%
+    bindCache(dimSelection()[[plotIdx]]$dims)
 })
 
-output$somData3 <- renderPlotly({
-  cat(file = stderr(), "som3\n")
-  colorbyGroups = input$colorbyGroups
-  selectedUpdate2()
-  showGroups = input$showGroups
-
-  plotIdx = 3
-  rs = rsUsed_d()
-  req(rs)
-  triggerRedraw()
-  dimSelection =  dimSelection()
-  pp1 = plotSOMScatter(x=sce,chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
-                       pointSize = "max", color_by ="n",xRN = sceRN, xCN = sceCN  ) + scale_colour_gradientn(colours=viridis::viridis(9))
-  somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection, sce = sce, metaD = metaD, env = env)
-})
-output$somData4 <- renderPlotly({
-  cat(file = stderr(), "som4\n")
-  colorbyGroups = input$colorbyGroups
-  selectedUpdate2()
-  showGroups = input$showGroups
-
-  plotIdx = 4
-  rs = rsUsed_d()
-  req(rs)
-  triggerRedraw()
-  dimSelection =  dimSelection()
-  pp1 = plotSOMScatter(x=sce,chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
-                       pointSize = "max", color_by ="n",xRN = sceRN, xCN = sceCN  ) + scale_colour_gradientn(colours=viridis::viridis(9))
-  somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection, sce = sce, metaD = metaD, env = env)
-})
-
-output$somData5 <- renderPlotly({
-  cat(file = stderr(), "som5\n")
-  colorbyGroups = input$colorbyGroups
-  selectedUpdate2()
-  showGroups = input$showGroups
-
-  plotIdx = 5
-  rs = rsUsed_d()
-  req(rs)
-  triggerRedraw()
-  dimSelection =  dimSelection()
-  pp1 = plotSOMScatter(x=sce,chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
-                       pointSize = "max", color_by ="n",xRN = sceRN, xCN = sceCN ) + scale_colour_gradientn(colours=viridis::viridis(9))
-  somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection, sce = sce, metaD = metaD, env = env)
-})
-
-
-output$somData6 <- renderPlotly({
-  cat(file = stderr(), "som6\n")
-  colorbyGroups = input$colorbyGroups
-  selectedUpdate2()
-  showGroups = input$showGroups
-
-  plotIdx = activePlot()
-  rs = rsUsed_d()
-  req(rs)
-  triggerRedraw()
-  dimSelection =  dimSelection()
-  pp1 = plotSOMScatter(x=sce,chs=c(dimSelection[[plotIdx]]$dims[1], dimSelection[[plotIdx]]$dims[2]),
-                       pointSize = "max", color_by ="n",xRN = sceRN, xCN = sceCN ) + scale_colour_gradientn(colours=viridis::viridis(9))
-  somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection, sce = sce, metaD = metaD, env = env)
+lapply(seq_len(nPlots), function(i) {
+  local({
+    plotIdxLocal <- i
+    output[[paste0("somData", plotIdxLocal)]] <- renderPlotly({
+      cat(file = stderr(), "som", plotIdxLocal, "\n")
+      colorbyGroups <- input$colorbyGroups
+      selectedUpdate2()
+      showGroups <- input$showGroups
+      dimSelection <- dimSelection()
+      rs <- rsUsed_d()
+      req(rs)
+      triggerRedraw()
+      plotIdx <- if (plotIdxLocal == 6) activePlot() else plotIdxLocal
+      pp1 <- somBasePlots[[plotIdx]]()
+      p3 <- somPlot(pp1, plotIdx, rs, colorbyGroups, showGroups,
+                    dimSelection = dimSelection, sce = sce, metaD = metaD, env = env)
+      ggplotly(p3, source = paste0("somData", plotIdxLocal), tooltip = "") %>%
+        layout(showlegend = F, dragmode = "select") %>%
+        config(renderer = "webgl") %>%
+        event_register("plotly_selected") %>%
+        event_register("plotly_relayout")
+    })
+  })
 })
 
 # color selections ----
@@ -1983,3 +1917,4 @@ shiny::observe({
 
 
 
+  
