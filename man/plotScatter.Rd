@@ -55,9 +55,7 @@ Bivariate scatter plots including visualization of
 (group-specific) gates, their boundaries and percentage of selected cells.
 }
 \examples{
-\dontrun{
-# Requires a SingleCellExperiment with SOM_codes and SOM_stats metadata.
-plotSOMScatter(sce, chs = c("FSC.A", "SSC.A"))
-}
+sce <- CySA_example_sce()
+plotSOMScatter(sce, chs = c("marker1", "marker2"))
 
 }

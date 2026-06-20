@@ -39,3 +39,9 @@ A list with \code{sce}, \code{sce_subsampled}, and \code{dList}.
 Subsamples a \code{SingleCellExperiment} object and builds the inputs
 required by \code{\link{clusterSelector}}.
 }
+\examples{
+sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
+names(prepped)
+
+}

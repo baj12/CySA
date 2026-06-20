@@ -21,10 +21,8 @@
 #' @return a \code{ggplot} object.
 #' 
 #' @examples
-#' \dontrun{
-#' # Requires a SingleCellExperiment with SOM_codes and SOM_stats metadata.
-#' plotSOMScatter(sce, chs = c("FSC.A", "SSC.A"))
-#' }
+#' sce <- CySA_example_sce()
+#' plotSOMScatter(sce, chs = c("marker1", "marker2"))
 #'
 #' @export
 plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
@@ -141,11 +139,18 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
   fill_var <- NULL
   col_var <- sprintf("%s", color_by)
 
-  # If statsSlot is NULL, check if color_by column exists in df
-  if (!is.null(statsSlot) || !col_var %in% colnames(df)) {
-    # Default to density coloring if stats not available
+  # Only use color_by if the column exists in the data frame
+  if (!col_var %in% colnames(df)) {
     col_var <- NULL
     fill_var <- NULL
+  }
+
+  # Only use pointSize if the column exists in the data frame
+  if (!pointSize %in% colnames(df)) {
+    pointSize <- "n"
+  }
+  if (!pointSize %in% colnames(df)) {
+    pointSize <- NULL
   }
 
   geom <- geom_point(alpha = 0.2, na.rm = TRUE)

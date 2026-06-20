@@ -48,9 +48,7 @@ A ggplot2 scatter plot.
 This function generates a scatter plot for a Bioconductor Experiment object.
 }
 \examples{
-\dontrun{
-# Requires a SingleCellExperiment with assay data.
-plotScatterBJ(sce, chs = c("FSC.A", "SSC.A"))
-}
+sce <- CySA_example_sce()
+plotScatterBJ(sce, chs = c("marker1", "marker2"))
 
 }

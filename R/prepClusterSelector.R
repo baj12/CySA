@@ -16,6 +16,11 @@
 #'
 #' @return A list with \code{sce}, \code{sce_subsampled}, and \code{dList}.
 #'
+#' @examples
+#' sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+#' prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
+#' names(prepped)
+#'
 #' @export
 prepClusterSelectorData <- function(sce,
                                     somFile = NULL,
@@ -86,7 +91,7 @@ prepClusterSelectorData <- function(sce,
       ][, .x]
     })
 
-    sce_subsampled <- do.call(cbind, sampling_indices)
+    sce_subsampled <- do.call(SummarizedExperiment::cbind, sampling_indices)
 
     if (!is.null(cache_file)) {
       save(sce_subsampled, file = cache_file)

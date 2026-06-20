@@ -1,17 +1,23 @@
 Package: CySA
 Title: Interactive Cluster Selector for Cytometry Data
-Version: 0.0.0.9000
+Version: 0.99.0
 Authors@R:
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+    person("Bernd", "Jagla", , "bernd.jagla@pasteur.fr", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-7696-0484"))
+Author: Bernd Jagla [aut, cre] (<https://orcid.org/0000-0002-7696-0484>)
+Maintainer: Bernd Jagla <bernd.jagla@pasteur.fr>
 Description: Provides an interactive Shiny application for selecting and
     visualizing clusters from flow cytometry data stored in
-    SingleCellExperiment objects. Extracted from the CyDa workflow tools.
+    SingleCellExperiment objects.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 8.0.0
+biocViews: SingleCell, FlowCytometry, Clustering, Visualization, ShinyApps
+URL: https://github.com/baj12/CySA
+BugReports: https://github.com/baj12/CySA/issues
 Depends:
-    R (>= 4.0.0)
+    R (>= 4.5.0)
 Imports:
     shiny,
     shinydashboard,
@@ -40,7 +46,6 @@ Imports:
     dendextend,
     ComplexHeatmap,
     cowplot,
-    ggplotify,
     Rtsne,
     umap,
     DT,

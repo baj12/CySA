@@ -14,7 +14,7 @@ highlight_df = function(x,y,rs, somCodesName = "SOM_codes", metaD = NULL){
 countBarPlotFunc <- function(rs, clusterPatientTable, cst, sce, outputList, groupsInput) {
   rs = as.integer(intersect(rs, colnames(clusterPatientTable)))
   # selected counts
-  rSums = data.frame(counts = rowSums(clusterPatientTable[,rs,drop=F]))
+  rSums = data.frame(counts = rowSums(clusterPatientTable[,rs,drop=FALSE]))
   rSums$id = rownames(clusterPatientTable)
 
   # counts to compare to
@@ -22,13 +22,13 @@ countBarPlotFunc <- function(rs, clusterPatientTable, cst, sce, outputList, grou
     if(cst %in% colnames(S4Vectors::metadata(sce)$experiment_info)){
       # expInfo = S4Vectors::metadata(sce)$experiment_info
       numCols <- unlist(lapply(S4Vectors::metadata(sce)$experiment_info, is.numeric), use.names = FALSE)
-      expInfo = S4Vectors::metadata(sce)$experiment_info[,numCols, drop=F]
-      # eI = expInfo[,!colnames(expInfo) %in% c("sample_nr", "sample_id", "sample"),drop=F]
+      expInfo = S4Vectors::metadata(sce)$experiment_info[,numCols, drop=FALSE]
+      # eI = expInfo[,!colnames(expInfo) %in% c("sample_nr", "sample_id", "sample"),drop=FALSE]
       eI = apply(expInfo,2,as.numeric) %>% as.data.frame()
       rownames(eI) = S4Vectors::metadata(sce)$experiment_info[,"sample_id"]
       if(is.na(eI) %>% any()) {
         cat(file = stderr(), "some NAs produced 3\n")
-        browser()
+        stop("NAs produced when converting experiment_info to numeric")
       }
       ctStats = eI[,cst]
       rSums = cbind(rSums, eI[rSums$id,cst])
@@ -36,13 +36,12 @@ countBarPlotFunc <- function(rs, clusterPatientTable, cst, sce, outputList, grou
       dfm <- reshape2::melt(rSums[,c('id',cst,'counts')],id.vars = 1)
       colnames(dfm) = c("id", "variable", "counts")
     }else if(cst %in% names(outputList)){
-      rSums = cbind(rSums, rowSums(clusterPatientTable[,outputList[[cst]],drop=F]))
+      rSums = cbind(rSums, rowSums(clusterPatientTable[,outputList[[cst]],drop=FALSE]))
       colnames(rSums) = c("counts", "id", cst)
       dfm <- reshape2::melt(rSums[,c('id',cst,'counts')],id.vars = 1)
       colnames(dfm) = c("id", "variable", "counts")
     } else{
-      cat(file = stderr(), "should not happen\n")
-      browser()
+      stop("Comparison column '", cst, "' not found in experiment_info or outputList")
     }
   } else {
     dfm <- rSums
@@ -98,19 +97,19 @@ PercentBarPlotFunc <- function(sce, relativeToCol, clusterPatientTable, rs, outp
 
   expInfo = metadata(sce)$experiment_info
   rownames(expInfo) = expInfo$sample_id
-  expInfo = expInfo[,!colnames(expInfo) %in% c("sample_nr", "sample_id", "sample"),drop=F]
+  expInfo = expInfo[,!colnames(expInfo) %in% c("sample_nr", "sample_id", "sample"),drop=FALSE]
 
   eI = apply(expInfo,2,as.numeric)
   # browser()
   # TODO make case
   # if(relativeToCol == "none"){
-  #   rSums = data.frame(Percent = rowSums(clusterPatientTable[,rs,drop=F])/rowSums(clusterPatientTable[,,drop=F])*100)
+  #   rSums = data.frame(Percent = rowSums(clusterPatientTable[,rs,drop=FALSE])/rowSums(clusterPatientTable[,,drop=FALSE])*100)
   # } else {
   #   if (relativeToCol %in% colnames(metadata(sce)$experiment_info)){
-  #     rSums = data.frame(Percent = rowSums(clusterPatientTable[,rs,drop=F])/expInfo[rownames(clusterPatientTable),relativeToCol]*100)
+  #     rSums = data.frame(Percent = rowSums(clusterPatientTable[,rs,drop=FALSE])/expInfo[rownames(clusterPatientTable),relativeToCol]*100)
   #   } else {
   #     if(relativeToCol %in% names(outputList)){
-  #       rSums = data.frame(Percent = rowSums(clusterPatientTable[,rs,drop=F])/rowSums(clusterPatientTable[,outputList[[relativeToCol]],drop=F])*100)
+  #       rSums = data.frame(Percent = rowSums(clusterPatientTable[,rs,drop=FALSE])/rowSums(clusterPatientTable[,outputList[[relativeToCol]],drop=FALSE])*100)
   #     } else{
   #       cat(file = stderr(), "ERROR\n")
   #     }
@@ -153,7 +152,7 @@ PercentBarPlotFunc <- function(sce, relativeToCol, clusterPatientTable, rs, outp
 ggsomPlot <- function(pp1, plotIdx, rs, dimSelection, somCodesName = "SOM_codes", sce, metaD = S4Vectors::metadata(sce), xlim = NULL, ylim = NULL){
   newData = highlight_df(dimSelection[[plotIdx]]$dims[1],dimSelection[[plotIdx]]$dims[2], rs, somCodesName, metaD = metaD)
   p3 = pp1 + geom_point(data=newData,
-                        aes(x=`x`,y=`y`, customdata = rs),
+                        aes(x=`x`,y=`y`),
                         color='red',
                         size=0.3)
   if (!is.null(xlim) && !is.null(ylim)) {
@@ -191,7 +190,7 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = 
     p3 = drawProjection(projectionDf, rs, colorbyGroups = colorbyGroups, sce = sce, outputList = outputList)
   } else {
     p3 = pp1 + geom_point(data=highlight_df(dimSelection[[plotIdx]]$dims[1],dimSelection[[plotIdx]]$dims[2], rs, somCodesName, metaD = metaD),
-                          aes(x=x,y=y, customdata=rs),
+                          aes(x=x,y=y),
                           color='red',
                           size=0.3)
   }
@@ -218,8 +217,7 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = 
 
 
   ggplotly(p3, source = paste0("somData", plotIdx), tooltip = "") %>%
-    layout(showlegend = F, dragmode = "select") %>%
-    config(renderer = "webgl") %>%
+    layout(showlegend = FALSE, dragmode = "select") %>%
     event_register("plotly_selected") %>%
     event_register("plotly_relayout")
 }
@@ -228,10 +226,11 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups, dimSelection = 
 
 
 tsneFunc <- function(dimRedSelection, perplexity, sce, somCodesName = "SOM_codes") {
-  seed = 1
   dimRedCols = dimRedSelection
-  set.seed(seed)
-  Rtsne::Rtsne(S4Vectors::metadata(sce)[[somCodesName]][,dimRedCols], perplexity = perplexity)
+  mat <- S4Vectors::metadata(sce)[[somCodesName]][,dimRedCols, drop = FALSE]
+  max_perplexity <- max(1, floor((nrow(mat) - 1) / 3))
+  perplexity <- min(as.integer(perplexity), max_perplexity)
+  Rtsne::Rtsne(mat, perplexity = perplexity)
 }
 
 
@@ -307,7 +306,7 @@ buildProjectionDf <- function(pp1, plotIdx, dimSelection, sce) {
 }
 
 drawProjection <- function(df, rs, colorbyGroups, sce, outputList = list()){
-  colN = names(df)[1:2]
+  colN = names(df)[seq_len(2)]
   if (!"id" %in% names(df)) {
     df$id <- seq_len(nrow(df))
     df <- dplyr::left_join(df, S4Vectors::metadata(sce)$SOM_stats, by = "id")
@@ -416,7 +415,8 @@ plotViolin2Func <- function(sce, somCodesName = "SOM_codes", violinSelection, up
 
 upsetPlotFunc <- function(upsetSelection, outputList, sce) {
 
-  if(length(upsetSelection)>31) upsetSelection = upsetSelection[1:31]
+  if(length(upsetSelection) < 2) return(NULL)
+  if(length(upsetSelection)>31) upsetSelection = head(upsetSelection, 31)
   cm = ComplexHeatmap::make_comb_mat(outputList[upsetSelection])
   ncells = rep(0,length(ComplexHeatmap::comb_name(cm)))
   grpCells = rep(0,length(upsetSelection))

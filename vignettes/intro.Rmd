@@ -1,19 +1,178 @@
 ---
-title: "intro"
+title: "Introduction to CySA"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{intro}
+  %\VignetteIndexEntry{Introduction to CySA}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r, include = FALSE}
+```{r setup, include = FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>"
 )
 ```
 
-```{r setup}
+# Overview
+
+**CySA** provides an interactive Shiny application for selecting and
+visualizing clusters from flow-cytometry data stored in
+`SingleCellExperiment` objects. It is designed to work with SOM-based
+clustering outputs such as those produced by
+[FlowSOM](https://bioconductor.org/packages/FlowSOM) and curated by the
+[CATALYST](https://bioconductor.org/packages/CATALYST) workflow.
+
+The main functions are:
+
+* `prepClusterSelectorData()` -- subsample a `SingleCellExperiment` and build
+the inputs required by the app.
+* `clusterSelector()` -- return a reusable `ui`/`server` pair that can be
+launched with `shiny::shinyApp()`.
+* `plotSOMScatter()` and `plotScatterBJ()` -- static ggplot2 helpers for SOM
+and scatter visualizations.
+
+# Installation
+
+Install the package from Bioconductor with:
+
+```{r install, eval = FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("CySA")
+```
+
+# Quick start
+
+`CySA` expects a `SingleCellExperiment` object that contains at least the
+following items in `metadata(sce)`:
+
+* `SOM_codes` -- a matrix of SOM node codes (one row per SOM node, one column
+per marker).
+* `SOM_stats` -- a data frame of per-node statistics with an `id` column.
+* `map$colsUsed` -- an optional character vector of markers used for SOM
+mapping.
+
+The object should also contain a `sample_id` column and a `cluster_id` column
+in `colData(sce)`.
+
+This vignette uses a small example data set shipped with the package:
+
+```{r example-data}
 library(CySA)
+sce <- CySA_example_sce()
+head(S4Vectors::metadata(sce)$SOM_codes)
+```
+
+Use `prepClusterSelectorData()` to subsample the data and generate a default
+list of marker pairs:
+
+```{r prep-data}
+prepped <- prepClusterSelectorData(
+  sce,
+  total_cells_to_sample = 200,
+  somCodesName = "SOM_codes"
+)
+names(prepped)
+```
+
+`clusterSelector()` needs a few additional inputs. Here we build minimal
+versions from the example data:
+
+```{r build-inputs}
+som_codes <- S4Vectors::metadata(sce)$SOM_codes
+markers <- S4Vectors::metadata(sce)$map$colsUsed
+
+dend <- stats::as.dendrogram(stats::hclust(stats::dist(som_codes)))
+
+dendTable <- data.frame(
+  id = seq_len(nrow(som_codes)),
+  label = rownames(som_codes),
+  stringsAsFactors = FALSE
+)
+
+clusterPatientTable <- table(
+  sample_id = sce$sample_id,
+  cluster_id = sce$cluster_id
+)
+
+somRasterData <- data.frame(
+  x = rep(seq_len(5), length.out = nrow(som_codes)),
+  y = rep(seq_len(2), each = nrow(som_codes) / 2),
+  id = seq_len(nrow(som_codes))
+)
+for (m in markers) {
+  somRasterData[[m]] <- seq_len(nrow(som_codes)) / nrow(som_codes)
+}
+
+arr <- array(
+  data = seq_len(10 * 10 * length(markers)),
+  dim = c(10, 10, length(markers))
+)
+somRasterObj <- raster::brick(arr)
+names(somRasterObj) <- markers
+```
+
+Create the reusable Shiny app object:
+
+```{r cluster-selector}
+cs <- clusterSelector(
+  sce = prepped$sce,
+  sce_subsampled = prepped$sce_subsampled,
+  dList = prepped$dList,
+  dend = dend,
+  dendTable = dendTable,
+  clusterPatientTable = clusterPatientTable,
+  somRasterData = somRasterData,
+  somRasterObj = somRasterObj
+)
+names(cs)
+```
+
+Launch the app interactively:
+
+```{r launch-app, eval = FALSE}
+shiny::shinyApp(ui = cs[[1]], server = cs[[2]])
+```
+
+The interactive session writes the selected cluster groupings back to the
+`outputList` object that was passed in.
+
+# Statistical comparison
+
+CySA can compare the relative abundance of selected SOM nodes between two
+sample groups. To use this feature, `metadata(sce)$experiment_info` must
+contain a grouping column (for example `condition`) and a `sample_id` column
+that matches `colData(sce)$sample_id`.
+
+In the app, select:
+
+* **groupsVar** -- the column in `experiment_info` that defines the groups.
+* **group1** and **group2** -- the two groups to compare.
+* **relativeTo** -- whether to report raw counts, normalize by a numeric column
+in `experiment_info`, or normalize by another cluster group.
+
+For each selected SOM node, CySA performs a two-sample t-test on the
+relative cell counts between the two groups and displays the result in the
+Stats panel.
+
+# Static plots
+
+For non-interactive use, `plotSOMScatter()` produces a ggplot2 scatter plot of
+two SOM channels:
+
+```{r som-scatter}
+plotSOMScatter(sce, chs = c("marker1", "marker2"))
+```
+
+`plotScatterBJ()` provides an alternative scatter visualization:
+
+```{r scatter-bj}
+plotScatterBJ(sce, chs = c("marker1", "marker2"))
+```
+
+# Session information
+
+```{r session-info}
+sessionInfo()
 ```

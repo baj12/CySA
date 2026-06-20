@@ -2,13 +2,18 @@
 % Please edit documentation in R/CySA-package.R
 \name{CySA_default_cluster_cols}
 \alias{CySA_default_cluster_cols}
-\title{CySA: Interactive Cluster Selector for Cytometry Data}
+\title{Default cluster color palette}
 \usage{
 CySA_default_cluster_cols()
 }
-\description{
-Provides an interactive Shiny application for selecting and visualizing
-clusters from flow cytometry data stored in \code{SingleCellExperiment}
-objects.
+\value{
+A character vector of hex colors.
 }
-\keyword{internal}
+\description{
+Returns the default 20-color palette used by CySA for cluster
+visualizations.
+}
+\examples{
+CySA_default_cluster_cols()
+
+}

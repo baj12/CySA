@@ -18,10 +18,8 @@
 #' @return A ggplot2 scatter plot.
 #'
 #' @examples
-#' \dontrun{
-#' # Requires a SingleCellExperiment with assay data.
-#' plotScatterBJ(sce, chs = c("FSC.A", "SSC.A"))
-#' }
+#' sce <- CySA_example_sce()
+#' plotScatterBJ(sce, chs = c("marker1", "marker2"))
 #'
 #' @export
 plotScatterBJ <- function (x, chs, gate = NULL, color_by = NULL, facet_by = NULL, bins = 100,
