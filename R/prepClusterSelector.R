@@ -57,45 +57,47 @@ prepClusterSelectorData <- function(sce,
     load(cache_file, envir = env)
     sce_subsampled <- env$sce_subsampled
   } else {
-    set.seed(seed)
+    sce_subsampled <- withr::with_seed(seed, {
+      cd <- as.data.frame(SingleCellExperiment::colData(sce))
+      proportions_df <- dplyr::group_by(cd, .data$sample_id, .data$cluster_id)
+      proportions_df <- dplyr::summarise(proportions_df, group_size = dplyr::n(), .groups = "drop")
+      proportions_df <- dplyr::ungroup(proportions_df)
+      proportions_df <- dplyr::mutate(
+        proportions_df,
+        total_size = sum(.data$group_size),
+        proportion = .data$group_size / .data$total_size,
+        n_to_sample = ceiling(.data$proportion * total_cells_to_sample + 10)
+      )
 
-    cd <- as.data.frame(SingleCellExperiment::colData(sce))
-    proportions_df <- dplyr::group_by(cd, .data$sample_id, .data$cluster_id)
-    proportions_df <- dplyr::summarise(proportions_df, group_size = dplyr::n(), .groups = "drop")
-    proportions_df <- dplyr::ungroup(proportions_df)
-    proportions_df <- dplyr::mutate(
-      proportions_df,
-      total_size = sum(.data$group_size),
-      proportion = .data$group_size / .data$total_size,
-      n_to_sample = ceiling(.data$proportion * total_cells_to_sample + 10)
-    )
+      sampling_indices <- purrr::map2(
+        proportions_df$n_to_sample,
+        proportions_df$group_size,
+        ~{
+          if (.x > .y) return(seq(.y))
+          sample(.y, .x)
+        }
+      )
+      sampling_indices <- purrr::set_names(
+        sampling_indices,
+        paste(proportions_df$sample_id, proportions_df$cluster_id, sep = "_")
+      )
+      sampling_indices <- purrr::imap(sampling_indices, ~{
+        sid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\1")
+        cid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\2")
+        sce[,
+          SingleCellExperiment::colData(sce)$sample_id == sid &
+            SingleCellExperiment::colData(sce)$cluster_id == cid
+        ][, .x]
+      })
 
-    sampling_indices <- purrr::map2(
-      proportions_df$n_to_sample,
-      proportions_df$group_size,
-      ~{
-        if (.x > .y) return(seq(.y))
-        sample(.y, .x)
+      sce_subsampled <- do.call(SummarizedExperiment::cbind, sampling_indices)
+
+      if (!is.null(cache_file)) {
+        save(sce_subsampled, file = cache_file)
       }
-    )
-    sampling_indices <- purrr::set_names(
-      sampling_indices,
-      paste(proportions_df$sample_id, proportions_df$cluster_id, sep = "_")
-    )
-    sampling_indices <- purrr::imap(sampling_indices, ~{
-      sid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\1")
-      cid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\2")
-      sce[,
-        SingleCellExperiment::colData(sce)$sample_id == sid &
-          SingleCellExperiment::colData(sce)$cluster_id == cid
-      ][, .x]
+
+      sce_subsampled
     })
-
-    sce_subsampled <- do.call(SummarizedExperiment::cbind, sampling_indices)
-
-    if (!is.null(cache_file)) {
-      save(sce_subsampled, file = cache_file)
-    }
   }
 
   if (length(SummarizedExperiment::assays(sce_subsampled)) == 0) {

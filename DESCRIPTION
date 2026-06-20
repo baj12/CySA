@@ -49,7 +49,8 @@ Imports:
     Rtsne,
     umap,
     DT,
-    collapsibleTree
+    collapsibleTree,
+    withr
 Suggests:
     knitr,
     rmarkdown,
