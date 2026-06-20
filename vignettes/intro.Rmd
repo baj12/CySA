@@ -27,8 +27,8 @@ The main functions are:
 
 * `prepClusterSelectorData()` -- subsample a `SingleCellExperiment` and build
 the inputs required by the app.
-* `clusterSelector()` -- return a reusable `ui`/`server` pair that can be
-launched with `shiny::shinyApp()`.
+* `clusterSelector()` -- return a Shiny app object that can be launched with
+`shiny::runApp()`.
 * `plotSOMScatter()` and `plotScatterBJ()` -- static ggplot2 helpers for SOM
 and scatter visualizations.
 
@@ -116,7 +116,7 @@ names(somRasterObj) <- markers
 Create the reusable Shiny app object:
 
 ```{r cluster-selector}
-cs <- clusterSelector(
+app <- clusterSelector(
   sce = prepped$sce,
   sce_subsampled = prepped$sce_subsampled,
   dList = prepped$dList,
@@ -126,13 +126,12 @@ cs <- clusterSelector(
   somRasterData = somRasterData,
   somRasterObj = somRasterObj
 )
-names(cs)
 ```
 
 Launch the app interactively:
 
 ```{r launch-app, eval = FALSE}
-shiny::shinyApp(ui = cs[[1]], server = cs[[2]])
+shiny::runApp(app)
 ```
 
 The interactive session writes the selected cluster groupings back to the

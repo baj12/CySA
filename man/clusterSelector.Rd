@@ -50,7 +50,8 @@ performance-sensitive plots.}
 \item{env}{Environment used to store mutable state (legacy argument).}
 }
 \value{
-A list with two elements: \code{ui} and \code{server}.
+A \code{\link[shiny]{shinyApp}} object. Launch the app with
+\code{shiny::runApp(app)}.
 }
 \description{
 Creates an interactive Shiny dashboard for selecting and visualizing
@@ -86,7 +87,7 @@ arr <- array(
 somRasterObj <- raster::brick(arr)
 names(somRasterObj) <- markers
 
-cs <- clusterSelector(
+app <- clusterSelector(
   sce = prepped$sce,
   sce_subsampled = prepped$sce_subsampled,
   dList = prepped$dList,
@@ -96,6 +97,8 @@ cs <- clusterSelector(
   somRasterData = somRasterData,
   somRasterObj = somRasterObj
 )
-names(cs)
+if (interactive()) {
+  shiny::runApp(app)
+}
 
 }

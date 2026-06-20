@@ -1,3 +1,8 @@
+# CySA: Interactive Cluster Selector for Cytometry Data.
+# Derived from the clusterSelector Shiny module originally developed in CyDa.
+# Refactored for Bioconductor with assistance from the opencode AI coding assistant.
+# All code is redistributed under the package LICENSE.
+
 utils::globalVariables(c(
   ".", ".data", "..ncount..", "counts", "groups", "id", "marker", "expr",
   "grpName", "Percent", "n", "value", "variable", "cluster", "colGrp",
@@ -37,7 +42,8 @@ utils::globalVariables(c(
 #' @param somRasterObj Raster object for SOM visualization.
 #' @param env Environment used to store mutable state (legacy argument).
 #'
-#' @return A list with two elements: \code{ui} and \code{server}.
+#' @return A \code{\link[shiny]{shinyApp}} object. Launch the app with
+#'   \code{shiny::runApp(app)}.
 #'
 #' @examples
 #' sce <- CySA_example_sce()
@@ -69,7 +75,7 @@ utils::globalVariables(c(
 #' somRasterObj <- raster::brick(arr)
 #' names(somRasterObj) <- markers
 #'
-#' cs <- clusterSelector(
+#' app <- clusterSelector(
 #'   sce = prepped$sce,
 #'   sce_subsampled = prepped$sce_subsampled,
 #'   dList = prepped$dList,
@@ -79,7 +85,9 @@ utils::globalVariables(c(
 #'   somRasterData = somRasterData,
 #'   somRasterObj = somRasterObj
 #' )
-#' names(cs)
+#' if (interactive()) {
+#'   shiny::runApp(app)
+#' }
 #'
 #' @export
 clusterSelector <- function(sce, # main input has to contain:
@@ -2123,7 +2131,7 @@ shiny::observe({
   #
   #   shinyApp(ui = ui, server = server)
 
-  return(list(ui = ui, server = server))
+  shiny::shinyApp(ui = ui, server = server)
 }
 
 

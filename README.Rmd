@@ -49,15 +49,24 @@ library(SingleCellExperiment)
 # sce should contain SOM_codes and SOM_stats in metadata(sce)
 prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 10000)
 
-# Launch the interactive selector
-cs <- clusterSelector(
+# Build the interactive selector app
+app <- clusterSelector(
   sce = prepped$sce,
   sce_subsampled = prepped$sce_subsampled,
   dList = prepped$dList
 )
 
-shiny::shinyApp(ui = cs[[1]], server = cs[[2]])
+# Launch the app
+shiny::runApp(app)
 ```
+
+## Provenance
+
+CySA is derived from the `clusterSelector` Shiny module originally developed in
+`CyDa`. The code was subsequently extracted into a standalone Bioconductor
+package and refactored with assistance from the opencode AI coding assistant.
+All redistributed and AI-assisted code remains under the package license
+(see `LICENSE`) and the maintainer is responsible for its maintenance.
 
 ## Citation
 

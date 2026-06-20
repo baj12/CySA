@@ -5,8 +5,8 @@
 * Initial Bioconductor submission of `CySA`, an interactive Shiny dashboard for
   selecting and visualizing clusters from flow-cytometry data stored in
   `SingleCellExperiment` objects.
-* `clusterSelector()` returns a reusable `ui`/`server` pair that can be launched
-  with `shiny::shinyApp()`.
+* `clusterSelector()` returns a Shiny app object that can be launched with
+  `shiny::runApp()`.
 * `prepClusterSelectorData()` subsamples a `SingleCellExperiment` and builds the
   inputs required by `clusterSelector()`.
 * `plotSOMScatter()` and `plotScatterBJ()` provide ggplot2-based SOM and scatter

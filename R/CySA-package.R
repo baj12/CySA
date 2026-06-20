@@ -1,3 +1,8 @@
+# CySA: Interactive Cluster Selector for Cytometry Data.
+# Derived from the clusterSelector Shiny module originally developed in CyDa.
+# Refactored for Bioconductor with assistance from the opencode AI coding assistant.
+# All code is redistributed under the package LICENSE.
+
 #' CySA: Interactive Cluster Selector for Cytometry Data
 #'
 #' Provides an interactive Shiny application for selecting and visualizing

@@ -43,7 +43,7 @@ pkgdown::build_site()
 
 ## App contract
 
-- `clusterSelector()` returns a list of `ui` and `server`; launch with `shiny::shinyApp(ui = cS[[1]], server = cS[[2]])`.
+- `clusterSelector()` returns a Shiny app object; launch with `shiny::runApp(app)`.
 - It accepts an `env` argument and mutates `outputList` in that environment so callers can retrieve selections after the app closes. Preserve this unless explicitly replacing it.
 
 ## Dependencies and imports
