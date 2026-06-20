@@ -40,7 +40,6 @@ utils::globalVariables(c(
 #' @return A list with two elements: \code{ui} and \code{server}.
 #'
 #' @examples
-#' \donttest{
 #' sce <- CySA_example_sce()
 #' prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
 #' som_codes <- S4Vectors::metadata(sce)$SOM_codes
@@ -81,7 +80,6 @@ utils::globalVariables(c(
 #'   somRasterObj = somRasterObj
 #' )
 #' names(cs)
-#' }
 #'
 #' @export
 clusterSelector <- function(sce, # main input has to contain:

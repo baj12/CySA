@@ -4,14 +4,16 @@
 # CySA
 
 <!-- badges: start -->
+
 <!-- badges: end -->
 
-**CySA** provides an interactive Shiny application for selecting and visualizing
-clusters from flow-cytometry data stored in
+**CySA** provides an interactive Shiny application for selecting and
+visualizing clusters from flow-cytometry data stored in
 [`SingleCellExperiment`](https://bioconductor.org/packages/SingleCellExperiment)
-objects. It is designed to work with SOM-based clustering outputs such as those
-produced by [FlowSOM](https://bioconductor.org/packages/FlowSOM) and curated by
-the [CATALYST](https://bioconductor.org/packages/CATALYST) workflow.
+objects. It is designed to work with SOM-based clustering outputs such
+as those produced by
+[FlowSOM](https://bioconductor.org/packages/FlowSOM) and curated by the
+[CATALYST](https://bioconductor.org/packages/CATALYST) workflow.
 
 ## Installation
 
@@ -25,7 +27,7 @@ if (!requireNamespace("BiocManager", quietly = TRUE))
 BiocManager::install("CySA")
 
 # Development version:
-BiocManager::install("bernd/CySA")  # replace with your GitHub user/repo
+BiocManager::install("baj12/CySA")
 ```
 
 ## Example
@@ -49,5 +51,5 @@ shiny::shinyApp(ui = cs[[1]], server = cs[[2]])
 
 ## Citation
 
-If you use CySA in your research, please cite the package and the relevant
-Bioconductor workflows.
+If you use CySA in your research, please cite the package and the
+relevant Bioconductor workflows.

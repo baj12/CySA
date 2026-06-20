@@ -37,7 +37,7 @@ if (!requireNamespace("BiocManager", quietly = TRUE))
 BiocManager::install("CySA")
 
 # Development version:
-BiocManager::install("bernd/CySA")  # replace with your GitHub user/repo
+BiocManager::install("baj12/CySA")
 ```
 
 ## Example

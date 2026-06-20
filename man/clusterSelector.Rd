@@ -57,7 +57,6 @@ Creates an interactive Shiny dashboard for selecting and visualizing
 clusters from a SingleCellExperiment object.
 }
 \examples{
-\donttest{
 sce <- CySA_example_sce()
 prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
 som_codes <- S4Vectors::metadata(sce)$SOM_codes
@@ -98,6 +97,5 @@ cs <- clusterSelector(
   somRasterObj = somRasterObj
 )
 names(cs)
-}
 
 }
