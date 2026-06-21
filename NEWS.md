@@ -1,3 +1,12 @@
+# CySA 0.99.1
+
+## Bioconductor submission fixes
+
+* Replaced `<<-` with `shiny::reactiveVal()` for app state.
+* Removed debug `cat()`/`print()` calls; kept `print()` only inside PDF device
+  context.
+* Applied `styler` formatting and wrapped selected long lines.
+
 # CySA 0.99.0
 
 ## New features

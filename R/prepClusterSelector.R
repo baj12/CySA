@@ -1,7 +1,7 @@
 # CySA: Interactive Cluster Selector for Cytometry Data.
 # Derived from the clusterSelector Shiny module originally developed in CyDa.
-# Refactored for Bioconductor with assistance from the opencode AI coding assistant.
-# All code is redistributed under the package LICENSE.
+# Refactored for Bioconductor with assistance from the opencode AI coding
+# assistant. All code is redistributed under the package LICENSE.
 
 #' Prepare Data for the Cluster Selector Shiny App
 #'
@@ -34,7 +34,6 @@ prepClusterSelectorData <- function(sce,
                                     somCodesName = "SOM_codes",
                                     assay = "exprs",
                                     seed = 123) {
-
   if (is.null(dList)) {
     colsUsed <- S4Vectors::metadata(sce)$map$colsUsed
     rn <- if (!is.null(colsUsed) && length(colsUsed) >= 12) colsUsed else rownames(sce)
@@ -77,8 +76,10 @@ prepClusterSelectorData <- function(sce,
       sampling_indices <- purrr::map2(
         proportions_df$n_to_sample,
         proportions_df$group_size,
-        ~{
-          if (.x > .y) return(seq(.y))
+        ~ {
+          if (.x > .y) {
+            return(seq(.y))
+          }
           sample(.y, .x)
         }
       )
@@ -86,10 +87,11 @@ prepClusterSelectorData <- function(sce,
         sampling_indices,
         paste(proportions_df$sample_id, proportions_df$cluster_id, sep = "_")
       )
-      sampling_indices <- purrr::imap(sampling_indices, ~{
+      sampling_indices <- purrr::imap(sampling_indices, ~ {
         sid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\1")
         cid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\2")
-        sce[,
+        sce[
+          ,
           SingleCellExperiment::colData(sce)$sample_id == sid &
             SingleCellExperiment::colData(sce)$cluster_id == cid
         ][, .x]

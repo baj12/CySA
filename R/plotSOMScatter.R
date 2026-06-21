@@ -1,11 +1,11 @@
 # CySA: Interactive Cluster Selector for Cytometry Data.
 # Derived from the clusterSelector Shiny module originally developed in CyDa.
-# Refactored for Bioconductor with assistance from the opencode AI coding assistant.
-# All code is redistributed under the package LICENSE.
+# Refactored for Bioconductor with assistance from the opencode AI coding
+# assistant. All code is redistributed under the package LICENSE.
 
 #' @rdname plotScatter
 #' @title Scatter plot
-#' 
+#'
 #' @description Bivariate scatter plots including visualization of
 #' (group-specific) gates, their boundaries and percentage of selected cells.
 #'
@@ -22,9 +22,9 @@
 #' @param k_pal optional cluster color palette.
 #' @param xRN optional row names.
 #' @param xCN optional channel names.
-#' 
+#'
 #' @return a \code{ggplot} object.
-#' 
+#'
 #' @examples
 #' sce <- CySA_example_sce()
 #' plotSOMScatter(sce, chs = c("marker1", "marker2"))
@@ -32,10 +32,10 @@
 #' @export
 plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
                            color_by = "n",
-                           bins = 100, assay = "exprs", statsSlot="SOM_stats",
+                           bins = 100, assay = "exprs", statsSlot = "SOM_stats",
                            label = c("target", "channel", "both"),
                            zeros = FALSE, k_pal = NULL,
-                           xRN = NULL, xCN=NULL) {
+                           xRN = NULL, xCN = NULL) {
   # check validity of input arguments
   label <- match.arg(label)
   # Ensure pointSize and color_by are single values
@@ -43,35 +43,37 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
   color_by <- color_by[1]
   args <- as.list(environment())
   # CATALYST:::.check_args_plotScatter(args)
-  if(!metaSlot %in% names(S4Vectors::metadata(x))) {
+  if (!metaSlot %in% names(S4Vectors::metadata(x))) {
     stop("Need ", metaSlot, " in metadata of sce")
   }
-  if(!statsSlot %in% names(S4Vectors::metadata(x))) {
+  if (!statsSlot %in% names(S4Vectors::metadata(x))) {
     warning(statsSlot, " not found in metadata of sce - proceeding without stats")
     statsSlot <- NULL
   }
   # 2do apply parallel
   # compute stats if requested, this is time consuming
-  for(ch in chs){
-    if(!ch %in% colnames(S4Vectors::metadata(x)[[metaSlot]])){
+  for (ch in chs) {
+    if (!ch %in% colnames(S4Vectors::metadata(x)[[metaSlot]])) {
       warning("computing stats for ", ch, "\n")
-      mdt =S4Vectors::metadata(x)[[metaSlot]]
+      mdt <- S4Vectors::metadata(x)[[metaSlot]]
       # mdt[,ch] = 0
-      mdt = cbind(mdt, matrix(0, nrow = nrow(mdt), ncol = 1))
+      mdt <- cbind(mdt, matrix(0, nrow = nrow(mdt), ncol = 1))
       colnames(mdt)[ncol(mdt)] <- ch
-      mdtt =S4Vectors::metadata(x)
-      for(cl in as.integer(unique(colData(x)$cluster_id))){
-        mdt[cl,ch] = mean(assays(x)[[assay]][ch,which(colData(x)$cluster_id == cl)])
+      mdtt <- S4Vectors::metadata(x)
+      for (cl in as.integer(unique(colData(x)$cluster_id))) {
+        mdt[cl, ch] <- mean(assays(x)[[assay]][ch, which(colData(x)$cluster_id == cl)])
       }
-      mdtt[[metaSlot]]= mdt
-      S4Vectors::metadata(x) = mdtt
+      mdtt[[metaSlot]] <- mdt
+      S4Vectors::metadata(x) <- mdtt
     }
   }
   # subset features to speed up matrix transpose  ‘
-  if(is.null(xRN))
+  if (is.null(xRN)) {
     xRN <- rownames(x)
-  if(is.null(xCN))
+  }
+  if (is.null(xCN)) {
     xCN <- CATALYST::channels(x)
+  }
   i <- lapply(list(xRN, xCN), function(u) {
     i <- match(chs, u, nomatch = 0)
     if (all(i == 0)) NULL else i
@@ -82,12 +84,14 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
   som_codes <- S4Vectors::metadata(x)[[metaSlot]]
   missing_chs <- setdiff(chs, colnames(som_codes))
   if (length(missing_chs) > 0) {
-    warning("Channels not found in SOM_codes: ", paste(missing_chs, collapse = ", "),
-            "\nAvailable: ", paste(colnames(som_codes), collapse = ", "))
+    warning(
+      "Channels not found in SOM_codes: ", paste(missing_chs, collapse = ", "),
+      "\nAvailable: ", paste(colnames(som_codes), collapse = ", ")
+    )
     # Filter to only available channels
     chs <- intersect(chs, colnames(som_codes))
     if (length(chs) < 2) {
-      return(NULL)  # Need at least 2 channels for scatter plot
+      return(NULL) # Need at least 2 channels for scatter plot
     }
   }
   yy <- som_codes[, chs, drop = FALSE]
@@ -97,13 +101,17 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
   # y = y[chs, , drop = FALSE]
   # rename features for visualization to
   # include both channel name & description
-  nms <- switch(label, target = xRN, channel = xCN,
-                both = ifelse(xCN == xRN, xCN, paste(xCN, xRN, sep = "-")))
+  nms <- switch(label,
+    target = xRN,
+    channel = xCN,
+    both = ifelse(xCN == xRN, xCN, paste(xCN, xRN, sep = "-"))
+  )
   # chs[i != 0] <- rownames(y) <- nms[i]
-  
+
   # construct data.frame of specified assay data & all cell metadata
-  if (isTRUE(color_by %in% names(CATALYST::cluster_codes(x))))
+  if (isTRUE(color_by %in% names(CATALYST::cluster_codes(x)))) {
     x[[color_by]] <- CATALYST::cluster_ids(x, color_by)
+  }
   cd <- cbind(SummarizedExperiment::colData(x), SingleCellExperiment::int_colData(x))
 
 
@@ -140,7 +148,7 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
     facet <- NULL
     ylab <- NULL
   }
-  
+
   fill_var <- NULL
   col_var <- sprintf("%s", color_by)
 
@@ -172,20 +180,23 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
     if (is.null(k_pal)) k_pal <- CySA_default_cluster_cols()
     scales <- scale_color_manual(values = k_pal)
     guides <- guides(col = guide_legend(
-      override.aes = list(alpha = 1, size = 3)))
+      override.aes = list(alpha = 1, size = 3)
+    ))
   }
-  
+
   # facet <- c(facet, facet_by)
   # if (!is.null(facet)) {
   #   if (length(facet) == 1) {
-  #     facet <- facet_wrap(facet)    
+  #     facet <- facet_wrap(facet)
   #   } else {
   #     facet <- facet_grid(
-  #       cols = vars(!!sym(facet[1])), 
+  #       cols = vars(!!sym(facet[1])),
   #       rows = vars(!!sym(facet[2])))
   #   }
   # }
-  if(is.null(chs))return(NULL)
+  if (is.null(chs)) {
+    return(NULL)
+  }
   xy <- sprintf("%s", chs)
   if (!zeros) df <- df[Matrix::rowSums(df[, chs[c(1, 2)]] == 0) == 0, ]
 
@@ -209,16 +220,21 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
   # Create plot
   p1 <- ggplot(df, aes_list) + geom
 
-  if(!is.null(scales))
-    p1 = p1 + scales
-  if(!is.null(guides))
-    p1 = p1 + guides
-  if(!is.null(ylab))
-    p1 = p1 +  ylab
-    p1 = p1 +  theme_bw() + theme(aspect.ratio = 1,
-                         panel.grid = element_blank(),
-                         axis.text = element_text(color = "black"),
-                         strip.background = element_rect(fill = "white"),
-                         legend.key.height = unit(0.8, "lines"))
+  if (!is.null(scales)) {
+    p1 <- p1 + scales
+  }
+  if (!is.null(guides)) {
+    p1 <- p1 + guides
+  }
+  if (!is.null(ylab)) {
+    p1 <- p1 + ylab
+  }
+  p1 <- p1 + theme_bw() + theme(
+    aspect.ratio = 1,
+    panel.grid = element_blank(),
+    axis.text = element_text(color = "black"),
+    strip.background = element_rect(fill = "white"),
+    legend.key.height = unit(0.8, "lines")
+  )
   p1
 }
