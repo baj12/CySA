@@ -1,3 +1,9 @@
+# CySA 0.99.3
+
+## Bioconductor submission fixes
+
+* Wrapped the second occurrence of a long `outputList[["Rest"]]` assignment.
+
 # CySA 0.99.2
 
 ## Bioconductor submission fixes
