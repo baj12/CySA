@@ -1491,9 +1491,9 @@ clusterSelector <- function(sce, # main input has to contain:
                 miny <- min(d$y)
                 maxy <- max(d$y)
                 ids <- which(dfPlot()[, dimSelection[[plotIdx]]$dims[1] %>% make.names()] > minx &
-                                 dfPlot()[, dimSelection[[plotIdx]]$dims[1] %>% make.names()] < maxx &
-                                 dfPlot()[, dimSelection[[plotIdx]]$dims[2] %>% make.names()] > miny &
-                                 dfPlot()[, dimSelection[[plotIdx]]$dims[2] %>% make.names()] < maxy)
+                                dfPlot()[, dimSelection[[plotIdx]]$dims[1] %>% make.names()] < maxx &
+                                dfPlot()[, dimSelection[[plotIdx]]$dims[2] %>% make.names()] > miny &
+                                dfPlot()[, dimSelection[[plotIdx]]$dims[2] %>% make.names()] < maxy)
                 ids <- colData(sce_subsampled[, sce_subsampled$sample_id %in% sampleIds])[ids, "cluster_id"]
                 # activePlot(1)
                 # rs = rsUsed()
@@ -2147,8 +2147,8 @@ clusterSelector <- function(sce, # main input has to contain:
                     xy <- somRasterPlot()
                     if (!is.null(xy) && !is.null(baseRasterGgplot)) {
                         print(baseRasterGgplot +
-                                  geom_point(data = xy, aes(x = x, y = y), color = "red", size = 1, inherit.aes = FALSE) +
-                                  geom_point(data = xy, aes(x = x, y = y), color = "red", shape = 3, size = 1, inherit.aes = FALSE))
+                                geom_point(data = xy, aes(x = x, y = y), color = "red", size = 1, inherit.aes = FALSE) +
+                                geom_point(data = xy, aes(x = x, y = y), color = "red", shape = 3, size = 1, inherit.aes = FALSE))
                     }
 
                     message("printing vlnPlot")

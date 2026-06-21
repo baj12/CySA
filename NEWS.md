@@ -1,3 +1,9 @@
+# CySA 0.99.6
+
+## Bioconductor submission fixes
+
+* Ensured all R source indentation is an exact multiple of 4 spaces.
+
 # CySA 0.99.5
 
 ## Bioconductor submission fixes
