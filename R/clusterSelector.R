@@ -988,7 +988,9 @@ clusterSelector <- function(sce, # main input has to contain:
         outputList <- rv$outputList
         outputList[[cName]] <- cList
         outputList[["Rest"]] <- c()
-        outputList[["Rest"]] <- as.integer(levels(sce$cluster_id)[!levels(sce$cluster_id) %in% unique(unlist(outputList))])
+  used <- unique(unlist(outputList))
+  all_levels <- levels(sce$cluster_id)
+  outputList[["Rest"]] <- as.integer(all_levels[!all_levels %in% used])
         for (na in names(outputList)) {
           if (length(outputList[[na]]) == 0) outputList[[na]] <- NULL
         }

@@ -1,3 +1,9 @@
+# CySA 0.99.2
+
+## Bioconductor submission fixes
+
+* Wrapped remaining long lines flagged by `BiocCheck`.
+
 # CySA 0.99.1
 
 ## Bioconductor submission fixes
