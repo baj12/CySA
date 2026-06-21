@@ -31,11 +31,11 @@
 #'
 #' @export
 plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
-                                                      color_by = "n",
-                                                      bins = 100, assay = "exprs", statsSlot = "SOM_stats",
-                                                      label = c("target", "channel", "both"),
-                                                      zeros = FALSE, k_pal = NULL,
-                                                      xRN = NULL, xCN = NULL) {
+                           color_by = "n",
+                           bins = 100, assay = "exprs", statsSlot = "SOM_stats",
+                           label = c("target", "channel", "both"),
+                           zeros = FALSE, k_pal = NULL,
+                           xRN = NULL, xCN = NULL) {
     # check validity of input arguments
     label <- match.arg(label)
     # Ensure pointSize and color_by are single values

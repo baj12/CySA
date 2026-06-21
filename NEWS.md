@@ -1,3 +1,10 @@
+# CySA 0.99.5
+
+## Bioconductor submission fixes
+
+* Fixed remaining indentation outliers (hanging indents and manually edited
+  blocks) so all R source lines use multiples of 4 spaces.
+
 # CySA 0.99.4
 
 ## Bioconductor submission fixes

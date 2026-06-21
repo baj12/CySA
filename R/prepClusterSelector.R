@@ -28,12 +28,12 @@
 #'
 #' @export
 prepClusterSelectorData <- function(sce,
-                                                                        somFile = NULL,
-                                                                        dList = NULL,
-                                                                        total_cells_to_sample = 100000,
-                                                                        somCodesName = "SOM_codes",
-                                                                        assay = "exprs",
-                                                                        seed = 123) {
+                                    somFile = NULL,
+                                    dList = NULL,
+                                    total_cells_to_sample = 100000,
+                                    somCodesName = "SOM_codes",
+                                    assay = "exprs",
+                                    seed = 123) {
     if (is.null(dList)) {
         colsUsed <- S4Vectors::metadata(sce)$map$colsUsed
         rn <- if (!is.null(colsUsed) && length(colsUsed) >= 12) colsUsed else rownames(sce)

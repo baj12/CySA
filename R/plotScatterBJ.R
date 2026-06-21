@@ -27,8 +27,8 @@
 #'
 #' @export
 plotScatterBJ <- function(x, chs, gate = NULL, color_by = NULL, facet_by = NULL, bins = 100,
-                                                    assay = "exprs", label = c("target", "channel", "both"),
-                                                    zeros = FALSE, k_pal = NULL, rowNames = NULL) {
+                          assay = "exprs", label = c("target", "channel", "both"),
+                          zeros = FALSE, k_pal = NULL, rowNames = NULL) {
     label <- match.arg(label)
     # args <- as.list(environment())
     # CATALYST:::.check_args_plotScatter(args)
