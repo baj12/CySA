@@ -1,3 +1,9 @@
+# CySA 0.99.7
+
+## Bioconductor submission fixes
+
+* Converted vignette R code chunks to 4-space indentation.
+
 # CySA 0.99.6
 
 ## Bioconductor submission fixes
