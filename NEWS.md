@@ -1,3 +1,10 @@
+# CySA 0.99.4
+
+## Bioconductor submission fixes
+
+* Converted R source files from 2-space to 4-space indentation to conform to
+  Bioconductor style guidelines.
+
 # CySA 0.99.3
 
 ## Bioconductor submission fixes

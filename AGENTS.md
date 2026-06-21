@@ -55,7 +55,7 @@ pkgdown::build_site()
 
 ## Code style
 
-- RStudio project enforces 2-space indentation, spaces for tabs, trailing-whitespace stripping, and POSIX line endings.
+- RStudio project enforces 4-space indentation, spaces for tabs, trailing-whitespace stripping, and POSIX line endings.
 - Use roxygen2 markdown (`Roxygen: list(markdown = TRUE)` in `DESCRIPTION`).
 
 ## Hazards
