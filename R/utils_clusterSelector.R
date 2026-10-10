@@ -90,26 +90,58 @@
     somCodesName, nPlots, fsom) {
     rnSCE <- rownames(sce)
     colsUsed <- metaD$map$colsUsed
-    shinydashboard::dashboardPage(
-        .buildDashboardHeader(),
-        sidebar = .buildClusterSelectorSidebar(sce, outputList, nPlots),
-        body = shinydashboard::dashboardBody(
-            .buildFirstBodyRow(colTree, nPlots),
-            .buildSOM2DPlotsBox(nPlots, colsUsed, outputList,
-                markers = rnSCE, dList = dList),
-            .buildSixStaticSOMBox(markers = rnSCE, dList = dList),
-            .buildFlowSOMPieBox(),
-            .buildFlowSOMStarsBox(fsom),
-            .buildStatsBox(metaD, somCodesName, outputList),
-            .buildSOMRasterBox(),
-            .buildViolinBox(metaD[[somCodesName]], colsUsed),
-            .buildRidgeBox(metaD[[somCodesName]], colsUsed),
-            .buildUpSetBox(outputList),
-            .buildDiagnosticsBox(metaD, outputList),
-            .buildOrderedHeatmapBox(outputList,
-                colnames(metaD[[somCodesName]])),
-            .buildDiffTestBox(metaD, outputList, rnSCE)
+    shiny::tagList(
+        .buildFaviconLink(),
+        shinydashboard::dashboardPage(
+            .buildDashboardHeader(),
+            sidebar = .buildClusterSelectorSidebar(sce, outputList, nPlots),
+            body = shinydashboard::dashboardBody(
+                .buildFirstBodyRow(colTree, nPlots),
+                .buildSOM2DPlotsBox(nPlots, colsUsed, outputList,
+                    markers = rnSCE, dList = dList),
+                .buildSixStaticSOMBox(markers = rnSCE, dList = dList),
+                .buildFlowSOMPieBox(),
+                .buildFlowSOMStarsBox(fsom),
+                .buildStatsBox(metaD, somCodesName, outputList),
+                .buildSOMRasterBox(),
+                .buildViolinBox(metaD[[somCodesName]], colsUsed),
+                .buildRidgeBox(metaD[[somCodesName]], colsUsed),
+                .buildUpSetBox(outputList),
+                .buildDiagnosticsBox(metaD, outputList),
+                .buildOrderedHeatmapBox(outputList,
+                    colnames(metaD[[somCodesName]])),
+                .buildDiffTestBox(metaD, outputList, rnSCE)
+            )
         )
+    )
+}
+
+#' Browser-Tab Favicon
+#'
+#' Four blue SOM nodes around one red "selected" node -- the same red/blue
+#' convention used throughout the app (e.g. the interactive dendrogram and
+#' 2D plots) -- as an inline SVG data URI, so the icon needs no extra
+#' package resource file or \code{shiny::addResourcePath()} registration
+#' and works the same way in any deployment.
+#'
+#' @return A \code{shiny::tags$head()} tag holding the favicon
+#'   \code{<link>}.
+#'
+#' @keywords internal
+.buildFaviconLink <- function() {
+    svg <- paste0(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">',
+        '<circle cx="8" cy="8" r="6.5" fill="#357ca5"/>',
+        '<circle cx="24" cy="8" r="6.5" fill="#357ca5"/>',
+        '<circle cx="8" cy="24" r="6.5" fill="#357ca5"/>',
+        '<circle cx="24" cy="24" r="6.5" fill="#357ca5"/>',
+        '<circle cx="16" cy="16" r="7" fill="#dc3545"/>',
+        '</svg>'
+    )
+    href <- paste0("data:image/svg+xml,",
+        utils::URLencode(svg, reserved = TRUE))
+    shiny::tags$head(
+        shiny::tags$link(rel = "icon", type = "image/svg+xml", href = href)
     )
 }
 

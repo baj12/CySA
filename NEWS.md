@@ -1,3 +1,13 @@
+# CySA 0.99.37
+
+## New features
+
+* Added a browser-tab favicon: four blue SOM nodes around one red
+  "selected" node, the same red/blue convention already used throughout
+  the app (e.g. the interactive dendrogram and 2D plots). The icon is an
+  inline SVG data URI, so it needs no extra package resource file or
+  `shiny::addResourcePath()` registration.
+
 # CySA 0.99.36
 
 ## New features

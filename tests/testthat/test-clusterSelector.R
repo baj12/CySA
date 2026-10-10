@@ -169,3 +169,17 @@ test_that("clusterSelector() preserves user-supplied outputList groups", {
   expect_true("Rest" %in% names(env$outputList))
   expect_true(all(env$outputList$MyGroup == c(1L, 2L)))
 })
+
+test_that(".buildFaviconLink returns a valid SVG data-URI <link> tag", {
+  link <- CySA:::.buildFaviconLink()
+  html <- htmltools::doRenderTags(link)
+
+  expect_match(html, '<link rel="icon"', fixed = TRUE)
+  expect_match(html, "data:image/svg\\+xml,")
+
+  href <- sub('.*href="([^"]*)".*', "\\1", html)
+  svg <- utils::URLdecode(sub("^data:image/svg\\+xml,", "", href))
+  expect_match(svg, "^<svg xmlns=")
+  # 4 blue nodes + 1 red "selected" node, the app's own selection colour.
+  expect_equal(lengths(regmatches(svg, gregexpr("<circle", svg))), 5L)
+})
