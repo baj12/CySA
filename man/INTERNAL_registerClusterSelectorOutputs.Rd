@@ -5,148 +5,15 @@
 \alias{.registerClusterSelectorOutputs}
 \title{Register clusterSelector Outputs}
 \usage{
-.registerClusterSelectorOutputs(
-  input,
-  output,
-  session,
-  rv,
-  rsUsed,
-  rsUsed_d,
-  activePlot,
-  dListRV,
-  dimSelection,
-  triggerRedraw,
-  selectedUpdate2,
-  selectedUpdate,
-  updatedoutputList,
-  colTree,
-  somRasterData,
-  somRasterObj,
-  baseRasterGgplot,
-  somRasterPlot,
-  somBasePlot,
-  somProjectionDf,
-  tsnePlot,
-  umapPlot,
-  pcaPlot,
-  scatterPlot,
-  dendPlot,
-  dendPlotlyData,
-  countBarPlot,
-  PercentBarPlot,
-  vlnPlot,
-  VlnPlot2,
-  upSetPlot,
-  flowSOMPiePlot,
-  groupsInput,
-  channelLimits,
-  getBasePlot,
-  fsom,
-  sce,
-  sce_subsampled,
-  sce_subsampledRN,
-  sceRN,
-  sceCN,
-  metaD,
-  dend,
-  dendTable,
-  clusterPatientTable,
-  somCodesName,
-  colsUsed,
-  rnSCE,
-  nPlots,
-  df,
-  dfPlot,
-  env,
-  verbose
-)
+.registerClusterSelectorOutputs(input, output, session, st)
 }
 \arguments{
 \item{input, output, session}{Shiny objects.}
 
-\item{rv}{Reactive values object holding \code{outputList}.}
-
-\item{rsUsed, rsUsed_d}{Reactive values for the current node selection.}
-
-\item{activePlot}{Reactive value tracking the active SOM plot.}
-
-\item{dListRV}{Reactive value holding the list of marker pairs.}
-
-\item{dimSelection}{Reactive value holding per-plot axis limits.}
-
-\item{triggerRedraw}{Reactive value used to force plot redraws.}
-
-\item{selectedUpdate2, selectedUpdate}{Reactive counters for invalidation.}
-
-\item{updatedoutputList}{Function that updates UI choices from outputList.}
-
-\item{colTree}{Optional collapsible tree object.}
-
-\item{somRasterData}{Data frame for SOM raster visualization.}
-
-\item{somRasterObj}{Raster object for SOM visualization.}
-
-\item{baseRasterGgplot}{Pre-built ggplot raster background.}
-
-\item{somRasterPlot}{Reactive selected-node coordinates.}
-
-\item{somBasePlot}{Reactive base SOM scatter plot.}
-
-\item{somProjectionDf}{Reactive projection data frame for showGroups mode.}
-
-\item{tsnePlot, umapPlot, pcaPlot}{Reactive dimension-reduction plots.}
-
-\item{scatterPlot}{Reactive 2-D scatter plot.}
-
-\item{dendPlot}{Reactive dendrogram object.}
-
-\item{dendPlotlyData}{Reactive dendrogram plotting data.}
-
-\item{countBarPlot, PercentBarPlot}{Reactive stats bar plots.}
-
-\item{vlnPlot, VlnPlot2}{Reactive violin plots.}
-
-\item{upSetPlot}{Reactive UpSet plot.}
-
-\item{flowSOMPiePlot}{Reactive FlowSOM marker pie plot.}
-
-\item{groupsInput}{Debounced reactive of sample-group selections.}
-
-\item{channelLimits}{Named list of per-channel axis limits.}
-
-\item{getBasePlot}{Function that returns a cached base SOM ggplot.}
-
-\item{fsom}{Optional \code{FlowSOM} object.}
-
-\item{sce}{Full \code{SingleCellExperiment}.}
-
-\item{sce_subsampled}{Subsampled \code{SingleCellExperiment}.}
-
-\item{sce_subsampledRN, sceRN, sceCN}{Row/column name helpers.}
-
-\item{metaD}{\code{metadata(sce)} list.}
-
-\item{dend}{Dendrogram object.}
-
-\item{dendTable}{Data frame for dendrogram navigation.}
-
-\item{clusterPatientTable}{Table of sample by cluster counts.}
-
-\item{somCodesName}{Name of the SOM codes metadata slot.}
-
-\item{colsUsed}{Character vector of SOM columns used.}
-
-\item{rnSCE}{\code{rownames(sce)}.}
-
-\item{nPlots}{Number of 2D SOM plots.}
-
-\item{df}{Static subsampled data frame.}
-
-\item{dfPlot}{Reactive subsampled data frame.}
-
-\item{env}{Environment used to store mutable state.}
-
-\item{verbose}{Logical indicating whether to print debug messages.}
+\item{st}{Server state environment (see \code{.initServerState()}).}
+}
+\value{
+Called for its side effects.
 }
 \description{
 Attaches all \verb{output$*} renderers used by the clusterSelector app. Observer

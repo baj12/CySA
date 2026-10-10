@@ -75,3 +75,14 @@ previously subsampled SCE file if \code{subsampledSCEFile} is provided.
 \item Save \code{sce.shiny.RData}.
 }
 }
+\examples{
+root <- file.path(tempdir(), "cysa-example")
+dir.create(file.path(root, "_data"), recursive = TRUE, showWarnings = FALSE)
+# A square SOM grid (here 4 x 4 nodes) is required for the raster data.
+sce <- CySA_example_sce(n_cells = 200, n_nodes = 16)
+saveRDS(sce, file.path(root, "_data", "sce.RDS"))
+prepClusterSelector(root, sce = sce, total_cells_to_sample = 100,
+    verbose = FALSE)
+list.files(file.path(root, "_data"))
+
+}

@@ -126,6 +126,22 @@ test_that("somData1 uses the projection path when showGroups is TRUE", {
 
 # ---- Gap 3: somDataMain ------------------------------------------------------
 
+test_that("SOM 2D box renders the optional neighbourhood-agreement checkbox", {
+  # The agreement view is opt-in: the checkbox exists, default unchecked.
+  # shiny.appobj keeps the ui tag in the closure of serverFuncSource.
+  app <- make_test_app()
+  e <- environment(app$app$serverFuncSource)
+  html <- as.character(e$ui)
+  expect_true(grepl('id="nnAgreement"', html, fixed = TRUE))
+  expect_true(grepl("Neighbourhood agreement", html, fixed = TRUE))
+  # The checkbox input itself carries no checked attribute (later unrelated
+  # checkboxes do, so anchor on the input tag).
+  seg <- substr(html, regexpr('id="nnAgreement"', html, fixed = TRUE),
+    nchar(html))
+  nnInput <- regmatches(seg, regexpr("^id=\"nnAgreement\"[^>]*", seg))[[1L]]
+  expect_false(grepl("checked", nnInput))
+})
+
 test_that("somDataMain renders past the dims/rsUsed_d guard", {
   fx <- make_test_app()
   quiet_plotly_test(
@@ -137,6 +153,40 @@ test_that("somDataMain renders past the dims/rsUsed_d guard", {
       expect_true(!is.null(out))
     })
   )
+})
+
+test_that("somDataMain carries agreement colours only when checked", {
+  # The agreement colour scale must appear in the somDataMain plotly only
+  # when nnAgreement is checked; group colouring or the plain scale must
+  # never carry it.
+  fx <- make_test_app()
+  has_agreement_colourbar <- function(q) {
+    if (is.character(q)) {
+      q <- jsonlite::fromJSON(q, simplifyVector = FALSE)
+    }
+    any(vapply(q$x$data, function(tr) {
+      cb <- tr$marker$colorbar %||% NULL
+      !is.null(cb) && identical(cb$title, "agreement")
+    }, logical(1)))
+  }
+  check <- function(nn, expected, showGroups = TRUE) {
+    quiet_plotly_test(
+      testServer(fx$app, {
+        select_dims(session, "marker1", "marker2")
+        select_nodes(session, "1, 2, 3", wait_for_debounced = FALSE)
+        session$setInputs(showGroups = showGroups, nnAgreement = nn,
+          colorbyGroups = character(0))
+        session$flushReact()
+        session$elapse(1100) # somBasePlot's bindCache debounce
+        out <- output$somDataMain
+        expect_true(!is.null(out))
+        expect_identical(has_agreement_colourbar(out), expected)
+      })
+    )
+  }
+  expect_error(check(TRUE, TRUE, showGroups = FALSE), regexp = NA)
+  expect_error(check(TRUE, TRUE, showGroups = TRUE), regexp = NA)
+  expect_error(check(FALSE, FALSE, showGroups = FALSE), regexp = NA)
 })
 
 # ---- Gap 4: tsne/umap/pca -- both showlegend branches, real computation ----
@@ -187,6 +237,47 @@ test_that("cellCounts adds a comparison row when compareStatsTo matches an outpu
     session$setInputs(compareStatsTo = "popA", singleNode = 1)
     tbl <- output$cellCounts
     expect_true(!is.null(tbl))
+  }))
+})
+
+test_that("cellCounts and cellPercentages survive a stale node id typed into a named group", {
+  # Regression: "Apply name" saved the raw typed node ids (including any
+  # out-of-range id) into outputList without validation; every output that
+  # later indexed clusterPatientTable/SOM codes by that group then crashed
+  # with "subscript out of bounds" (PercentBar, CountBar, cellCounts,
+  # cellPercentages, VlnPlot, VlnPlot2 were all affected).
+  fx <- make_test_app()
+  quiet_plotly_test(testServer(fx$app, {
+    select_nodes(session, "1, 2, 99999", wait_for_debounced = FALSE)
+    session$setInputs(clusterName = "grpBad")
+    session$setInputs(applyName = 1)
+    session$flushReact()
+    expect_false(99999L %in% rv$outputList[["grpBad"]])
+
+    session$setInputs(compareStatsTo = "grpBad", relativeTo = "grpBad",
+      singleNode = 1,
+      violinSelection = S4Vectors::metadata(fx$sce)$map$colsUsed)
+    session$elapse(1200) # violinPlotSelection() debounce
+    session$flushReact()
+    expect_no_error(force(output$cellCounts))
+    expect_no_error(force(output$cellPercentages))
+    expect_no_error(force(output$CountBar))
+    expect_no_error(force(output$PercentBar))
+    expect_no_error(force(output$VlnPlot))
+    expect_no_error(force(output$VlnPlot2))
+  }))
+})
+
+test_that("cellPercentages works when relativeTo is a numeric experiment_info column", {
+  # Regression: the inline eI matrix built by .cellPercentages() lost its
+  # sample_id row names (unlike the shared .numericExperimentInfo()
+  # helper), so indexing it by sample id in .computeRelativeCounts() threw
+  # "subscript out of bounds".
+  fx <- make_test_app()
+  quiet_plotly_test(testServer(fx$app, {
+    select_nodes(session, "1, 2, 3", wait_for_debounced = FALSE)
+    session$setInputs(relativeTo = "some_numeric")
+    expect_no_error(force(output$cellPercentages))
   }))
 })
 

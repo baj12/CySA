@@ -8,8 +8,8 @@
 # returns the UI/server pair for clusterSelector().
 
 #' Build clusterSelector UI and Server
-# '
-# ' Creates the UI/server pair for the clusterSelector Shiny app.
+#'
+#' Creates the UI/server pair for the clusterSelector Shiny app.
 #'
 #' @inheritParams clusterSelector
 #'
@@ -17,107 +17,133 @@
 #'
 #' @keywords internal
 #' @name INTERNAL_buildClusterSelectorApp
-.buildClusterSelectorApp <- function(sce,
-                                     sce_subsampled,
-                                     outputList = list(),
-                                     colTree = NULL,
-                                     dList,
-                                     dend,
-                                     dendTable,
-                                     clusterPatientTable,
-                                     somCodesName = "SOM_codes",
-                                     nPlots = 6,
-                                     somRasterData,
-                                     somRasterObj,
-                                     fsom = NULL,
-                                     env = environment(),
-                                     verbose = FALSE) {
-  # nocov start
-  # for (idx in seq_along(dList)) {
-  #     assign(paste0("d", idx, ".1"), dList[[idx]][1])
-  #     assign(paste0("d", idx, ".2"), dList[[idx]][2])
-  # }
-
-  metaD <- .validateClusterSelectorInputs(
-    sce, sce_subsampled, outputList, dList, dend, dendTable,
-    clusterPatientTable, somRasterData, somCodesName, nPlots, fsom
-  )
-
-  rnSCE <- rownames(sce)
-
-  jscode <- "shinyjs.closeWindow = function() { window.close(); }"
-
-  if ("outputList" %in% ls(envir = env)) {
-    outputList <- get("outputList", envir = env)
-  }
-  cluster_levels <- if (is.factor(sce$cluster_id)) levels(sce$cluster_id) else sort(unique(as.integer(sce$cluster_id)))
-  outputList <- .initializeOutputList(outputList, cluster_levels)
-  colsUsed <- metaD$map$colsUsed
-  if (!"id" %in% colnames(somRasterData)) {
-    somRasterData$id <- seq_len(nrow(somRasterData))
-  }
-  keepCols <- intersect(c("x", "y", "id", colsUsed), colnames(somRasterData))
-  somRasterData <- somRasterData[, keepCols]
-  if (!is.null(somRasterObj)) {
-    if (inherits(somRasterObj, c("RasterBrick", "RasterStack"))) {
-      somRasterObj <- raster::subset(somRasterObj, colsUsed)
-    } else if (is.array(somRasterObj)) {
-      # Subset array layers by name
-      layer_idx <- which(dimnames(somRasterObj)[[3]] %in% colsUsed)
-      somRasterObj <- somRasterObj[, , layer_idx, drop = FALSE]
-    }
-  }
-
-  # Pre-build the SOM raster heatmap as a ggplot object once.
-  # The overlay (selected nodes) is added per-render as ggplot layers.
-  # Using ggplot avoids the lattice/base-graphics incompatibility that
-  # broke the previous recordPlot/replayPlot approach.
-  baseRasterGgplot <- .buildBaseRasterGgplot(somRasterData, colsUsed)
-
-  # Pre-compute per-channel axis limits once from the full assay matrix.
-  # This avoids scanning assays(sce)[[1]] every time dimSelection changes.
-  assay_mat <- SummarizedExperiment::assays(sce)[[1]]
-  channelLimits <- lapply(rownames(sce), function(ch) {
-    vals <- assay_mat[ch, ]
-    c(min = min(vals), max = max(vals))
-  })
-  names(channelLimits) <- rownames(sce)
-
-  assign(x = "outputList", value = outputList, envir = env)
-
-
-  # nPlots = 15
-  # nPlots = 6
-
-
-  ui <- shinydashboard::dashboardPage(
-    shinydashboard::dashboardHeader(title = "Cluster Selector"),
-    sidebar = .buildClusterSelectorSidebar(sce, outputList, nPlots),
-    body = shinydashboard::dashboardBody(
-      .buildFirstBodyRow(colTree, nPlots),
-      .buildSOM2DPlotsBox(nPlots, colsUsed, outputList,
-        markers = rnSCE, dList = dList
-      ),
-      .buildSixStaticSOMBox(markers = rnSCE, dList = dList),
-      .buildFlowSOMPieBox(),
-      .buildFlowSOMStarsBox(fsom),
-      .buildStatsBox(metaD, somCodesName, outputList),
-      .buildSOMRasterBox(),
-      .buildViolinBox(metaD[[somCodesName]], colsUsed),
-      .buildUpSetBox(outputList)
+.buildClusterSelectorApp <- function(sce, sce_subsampled, outputList = list(),
+    colTree = NULL, dList, dend, dendTable, clusterPatientTable,
+    somCodesName = "SOM_codes", nPlots = 6, somRasterData, somRasterObj,
+    fsom = NULL, env = environment(), verbose = FALSE) {
+    # nocov start
+    metaD <- .validateClusterSelectorInputs(
+        sce, sce_subsampled, outputList, dList, dend, dendTable,
+        clusterPatientTable, somRasterData, somCodesName, nPlots, fsom
     )
-  )
+    if ("outputList" %in% ls(envir = env)) {
+        outputList <- get("outputList", envir = env)
+    }
+    clusterLevels <- if (is.factor(sce$cluster_id)) {
+        levels(sce$cluster_id)
+    } else {
+        sort(unique(as.integer(sce$cluster_id)))
+    }
+    outputList <- .initializeOutputList(outputList, clusterLevels)
+    colsUsed <- metaD$map$colsUsed
+    raster <- .subsetSomRaster(somRasterData, somRasterObj, colsUsed)
+    assign(x = "outputList", value = outputList, envir = env)
+    ui <- .buildClusterSelectorUI(sce, outputList, colTree, dList, metaD,
+        somCodesName, nPlots, fsom)
+    server <- .buildClusterSelectorServer(
+        sce = sce, sce_subsampled = sce_subsampled,
+        outputList = outputList, colTree = colTree, dList = dList,
+        dend = dend, dendTable = dendTable,
+        clusterPatientTable = clusterPatientTable,
+        somCodesName = somCodesName, nPlots = nPlots,
+        somRasterData = raster$data, somRasterObj = raster$obj,
+        fsom = fsom, env = env, verbose = verbose
+    )
+    list(ui = ui, server = server)
+    # nocov end
+}
 
-  server <- .buildClusterSelectorServer(
-    sce = sce, sce_subsampled = sce_subsampled,
-    outputList = outputList, colTree = colTree, dList = dList,
-    dend = dend, dendTable = dendTable,
-    clusterPatientTable = clusterPatientTable,
-    somCodesName = somCodesName, nPlots = nPlots,
-    somRasterData = somRasterData, somRasterObj = somRasterObj,
-    fsom = fsom, env = env, verbose = verbose
-  )
+#' Restrict the SOM Raster Inputs to the Clustering Markers
+#'
+#' @param somRasterData Data frame with \code{x}, \code{y}, optional
+#'   \code{id} and one column per marker.
+#' @param somRasterObj Raster brick/stack, array, or \code{NULL}.
+#' @param colsUsed Clustering markers.
+#'
+#' @return A list with the subset \code{data} (with an \code{id} column) and
+#'   \code{obj}.
+#'
+#' @keywords internal
+.subsetSomRaster <- function(somRasterData, somRasterObj, colsUsed) {
+    if (!"id" %in% colnames(somRasterData)) {
+        somRasterData$id <- seq_len(nrow(somRasterData))
+    }
+    keepCols <- intersect(c("x", "y", "id", colsUsed), colnames(somRasterData))
+    if (inherits(somRasterObj, c("RasterBrick", "RasterStack"))) {
+        somRasterObj <- raster::subset(somRasterObj, colsUsed)
+    } else if (is.array(somRasterObj)) {
+        layers <- which(dimnames(somRasterObj)[[3]] %in% colsUsed)
+        somRasterObj <- somRasterObj[, , layers, drop = FALSE]
+    }
+    list(data = somRasterData[, keepCols], obj = somRasterObj)
+}
 
-  list(ui = ui, server = server)
-  # nocov end
+#' Build the clusterSelector Dashboard UI
+#'
+#' @inheritParams clusterSelector
+#' @param metaD \code{metadata(sce)} list.
+#'
+#' @return A \code{shinydashboard::dashboardPage}.
+#'
+#' @keywords internal
+.buildClusterSelectorUI <- function(sce, outputList, colTree, dList, metaD,
+    somCodesName, nPlots, fsom) {
+    rnSCE <- rownames(sce)
+    colsUsed <- metaD$map$colsUsed
+    shinydashboard::dashboardPage(
+        .buildDashboardHeader(),
+        sidebar = .buildClusterSelectorSidebar(sce, outputList, nPlots),
+        body = shinydashboard::dashboardBody(
+            .buildFirstBodyRow(colTree, nPlots),
+            .buildSOM2DPlotsBox(nPlots, colsUsed, outputList,
+                markers = rnSCE, dList = dList),
+            .buildSixStaticSOMBox(markers = rnSCE, dList = dList),
+            .buildFlowSOMPieBox(),
+            .buildFlowSOMStarsBox(fsom),
+            .buildStatsBox(metaD, somCodesName, outputList),
+            .buildSOMRasterBox(),
+            .buildViolinBox(metaD[[somCodesName]], colsUsed),
+            .buildRidgeBox(metaD[[somCodesName]], colsUsed),
+            .buildUpSetBox(outputList),
+            .buildDiagnosticsBox(metaD, outputList),
+            .buildOrderedHeatmapBox(outputList,
+                colnames(metaD[[somCodesName]])),
+            .buildDiffTestBox(metaD, outputList, rnSCE)
+        )
+    )
+}
+
+#' Dashboard Header With the Running CySA Version
+#'
+#' The version tag lets users and bug reports reference the right build.
+#' The AdminLTE logo box (.main-header .logo) is 50px high with an
+#' inherited 50px line-height and overflow:hidden, which would push a second
+#' line out of view; the embedded style relaxes the line-height so both the
+#' title and the version fit. The version sits on its own line
+#' (display:block) because the fixed-width logo box clips inline suffixes.
+#'
+#' @return A \code{shinydashboard::dashboardHeader}.
+#'
+#' @keywords internal
+.buildDashboardHeader <- function() {
+    csaVersion <- tryCatch(
+        as.character(utils::packageVersion("CySA")),
+        error = function(e) "devel"
+    )
+    shinydashboard::dashboardHeader(
+        title = shiny::span(
+            shiny::tags$style(shiny::HTML(paste(
+                ".main-header .logo { line-height: 1.2; padding-top: 4px;",
+                "padding-bottom: 4px; }"
+            ))),
+            "Cluster Selector",
+            shiny::tags$small(
+                paste0("CySA ", csaVersion),
+                style = paste(
+                    "display:block; font-size:60%; opacity:0.75;",
+                    "line-height:1.2; white-space:nowrap;"
+                )
+            )
+        )
+    )
 }

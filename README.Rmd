@@ -103,6 +103,17 @@ heatmaps help characterize the phenotype of a selected cluster:
 <img src="man/figures/README-marker-pies.png" width="100%"/>
 <img src="man/figures/README-som-heatmaps.png" width="100%"/>
 
+### Outliers and node membership
+
+The marker ridge box shows, per marker, the density of all cells and of
+the selection, a band holding the central 99% of the selected cells, and
+the selected cells outside that band as clickable dots. Clicking a dot
+traces the cell across all markers and explains which clustering markers
+keep it in its SOM node rather than in the nearest node outside the
+selection:
+
+<img src="man/figures/README-marker-ridge.png" width="100%"/>
+
 ### Statistics
 
 Selected clusters can be compared between sample groups (e.g. control
@@ -110,6 +121,40 @@ vs. treated) with per-sample counts, percentages, and a two-sample
 t-test:
 
 <img src="man/figures/README-stats-panel.png" width="100%"/>
+
+### Sample diagnostics, cluster comparison, and differential testing
+
+Three panels reproduce the sample-level QC and differential-testing
+figures of the reference CATALYST/diffcyt CyTOF workflow inside CySA
+itself (see `vignettes/catalyst_workflow.Rmd`), each restricted to a
+chosen selection of saved clusters/metaclusters rather than always using
+every cell:
+
+**Sample diagnostics** -- a pseudobulk MDS plot of the samples and a
+per-sample marker-expression heatmap (plus marker non-redundancy scores,
+not shown), letting you see how samples separate within a chosen cell
+population:
+
+<img src="man/figures/README-diagnostics-mds.png" width="49%"/>
+<img src="man/figures/README-diagnostics-heatmap.png" width="49%"/>
+
+**Ordered cluster heatmap** -- a dendrogram-ordered marker-by-cluster
+heatmap with a cell-count bar, for comparing marker profiles across a
+chosen set of clusters/metaclusters and markers side by side:
+
+<img src="man/figures/README-ordered-heatmap.png" width="100%"/>
+
+**Differential testing (diffcyt)** -- GLMM-based differential abundance
+and LMM-based differential state tests comparing chosen saved groups
+across samples, with a results heatmap:
+
+<img src="man/figures/README-diff-test.png" width="100%"/>
+
+Every box in the dashboard also has an info button (the small circled
+"i" next to its title) that opens a modal explaining what the box does,
+what to expect, how to use it, and what it requires:
+
+<img src="man/figures/README-info-modal.png" width="75%"/>
 
 ## Provenance
 

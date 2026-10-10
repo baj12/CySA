@@ -1,3 +1,283 @@
+# CySA 0.99.36
+
+## New features
+
+* Added a "Sample diagnostics" panel reproducing the sample-level QC
+  figures of the CATALYST/CyTOF reference workflow
+  (`vignettes/catalyst_workflow.Rmd`) inside CySA itself: a pseudobulk MDS
+  plot of the samples (equivalent of `CATALYST::pbMDS()`), a per-sample
+  marker-expression heatmap (`plotExprHeatmap()`), and marker
+  non-redundancy scores (`plotNRS()`), each optionally coloured by an
+  `experiment_info` column.
+* Added an "Ordered cluster heatmap" panel: marker medians per SOM node,
+  ordered by the existing dendrogram's leaf order, with a cell-count bar
+  alongside -- CySA's equivalent of `CATALYST::plotMultiHeatmap(bars =
+  TRUE)`, reusing the dendrogram already built for the interactive
+  dendrogram panel instead of a second, independently ordered clustering.
+* Added a "Differential testing (diffcyt)" panel: GLMM-based differential
+  abundance (DA) and LMM-based differential state (DS) tests, adapted
+  from diffcyt's low-level pipeline (`calcCounts()`/`calcMedians()` +
+  `testDA_GLMM()`/`testDS_LMM()`). Unlike the reference workflow, which
+  tests CATALYST metaclusters, this tests CySA's own saved node groups
+  (`outputList`), so the comparison of interest is always the grouping
+  the user has already curated interactively. The UI enforces the two
+  known diffcyt/GLMM gotchas found while building
+  `vignettes/catalyst_workflow.Rmd`: a DA test requires a random effect
+  (normally `sample_id`), and a DS test must not use `sample_id` as its
+  random effect (each cluster-sample combination already contributes one
+  median value, which perfectly confounds a `sample_id` random intercept
+  with the residual). Adds `diffcyt` as a new package dependency.
+* Every dashboard box now has a small info button next to its title that
+  opens a modal explaining what the box does, what to expect, how to use
+  it, and what it requires -- longer-form help than the one-line hover
+  tooltips already on individual controls.
+* "Sample diagnostics", "Ordered cluster heatmap" and "Differential
+  testing" now let you restrict the analysis to a chosen selection of
+  saved clusters/metaclusters (and, for the ordered heatmap, markers),
+  instead of always using every cell/cluster. The differential-testing
+  panel's own group selection replaces always testing every saved group.
+
+## Bug fixes
+
+* The differential-testing panel crashed with "NA/NaN/Inf in foreign
+  function call" whenever the compared groups shared a SOM node -- most
+  commonly, leaving the always-present "selected" pseudo-group selected
+  alongside the named group just created from it. `.nodeGroupMap()`'s
+  node-to-group lookup silently kept only the first group for a shared
+  node, leaving the other group with zero cells; that produced an
+  all-`NA` row in `diffcyt::calcMediansByClusterMarker()`'s output, which
+  crashed `diffcyt::plotHeatmap()`'s internal `hclust()` row clustering.
+  The compared groups are now checked up front and rejected with a clear
+  error if they overlap, and a genuinely empty saved group (e.g. an
+  emptied-out "Rest") is now dropped with a warning instead of reaching
+  diffcyt at all. The default group selection also now excludes
+  "selected", the most common source of this overlap.
+
+# CySA 0.99.35
+
+## User-interface improvements
+
+* New optional neighbourhood-agreement view for the main SOM 2D plot
+  (`somDataMain`): a "Neighbourhood agreement" checkbox (default off)
+  colours each SOM node by how well the displayed marker pair preserves
+  its nearest neighbours in the full SOM code space (Jaccard index of
+  the node's k nearest neighbours in both spaces, k = 10). Nodes
+  rendered blue are faithful to the full map; hot colours flag nodes
+  whose local neighbourhood the pair distorts. The tooltip gains an
+  "agreement:" line. Saved-group colouring still wins when active, and
+  the checkbox can be combined with "Colour groups". Only SOM nodes
+  with complete pair coordinates are scored.
+
+## Bug fixes
+
+* Naming the current selection ("Apply name") saved whatever node ids
+  were typed into "Cluster numbers" verbatim, without checking them
+  against the actual SOM. A stale or mistyped id (e.g. one left over
+  after switching datasets, or a typo) saved into a named group later
+  crashed every output that read that group by indexing
+  `clusterPatientTable`/the SOM codes with it and hitting "subscript
+  out of bounds": the counts and percentage bar plots, the cell-count
+  table, the per-sample percentages, and both violin plots. Node ids
+  are now validated against the current data when a name is applied,
+  and every remaining place that indexes by a saved group's node ids
+  (`.computeRelativeCounts()`, `.cellCountsTable()`, `.countComparison()`,
+  `.violinData()`) additionally drops any id outside the current range
+  instead of crashing, so a stale group degrades gracefully.
+* `cellPercentages` threw "subscript out of bounds" whenever "Parent
+  population for percentages" was set to a numeric `experiment_info`
+  column (e.g. a cytometer's total-cell count): the sample-id row names
+  needed to look up that column were built inline and lost by
+  `apply()`/`as.numeric()`, instead of reusing the shared
+  `.numericExperimentInfo()` helper that re-attaches them.
+
+# CySA 0.99.34
+
+## User-interface improvements
+
+* The marker ridge plot is rebuilt on top of `ggridges`: a new geom,
+  `geom_ridgeline_traced()`, subclasses `ggridges::GeomRidgeline()` and
+  understands one additional value of the `datatype` aesthetic, `"path"`,
+  so the ridges, the connected trace polylines and the outlier dots are
+  drawn inside one layer. The traces therefore sit correctly above every
+  ridge regardless of draw order, and the layer count drops from four to
+  one.
+* The marker ridge box in the app is now interactive (plotly,
+  `plotRidgeInteractive()`). Each marker row shows the all-cell density,
+  the density of the selected cells, a shaded band holding the central
+  fraction of the selected cells ("Band coverage", default 0.99: the
+  0.5% to 99.5% quantiles, so 1% of the selected cells fall outside on
+  each marker), the selection mean (solid) and the all-cell mean
+  (dotted). Selected cells outside the band are outlier dots; hovering
+  shows the cell, node, sample, value and within-selection z-score.
+  Clicking a dot traces that cell across every row and a new panel
+  explains its SOM node membership: the per-marker contributions to the
+  squared-distance difference between its own node and the nearest node
+  outside the selection (clustering markers from `map$colsUsed`).
+  Rows are sorted by separation from all cells (checkbox), clustering
+  markers are marked with `*`, and markers on very different scales get a
+  per-row scale. The static ggplot version stays in the PDF export; it
+  converts the band coverage to the matching sd multiple (normal
+  quantile, 0.99 -> 2.58 sd).
+
+## Documentation
+
+* The vignette and README gained a "Marker ridge: outliers and node
+  membership" section with a screenshot
+  (`man/figures/README-marker-ridge.png`) explaining the band, the
+  outlier dots and the node membership panel.
+* The vignette's table of statistical features, previously flattened
+  into one paragraph, is a proper Markdown table again.
+
+## Bug fixes
+
+* The marker ridge plot collapsed into a single flat line at the top of
+  the panel: `GeomRidgelineTraced` gave trace rows a draw-order `ymin`
+  of a fixed 1 data unit below the ridges, which trained the y scale and
+  dwarfed the (small) density values. The offset is now a tiny fraction
+  of the data span.
+* Marker row labels in the ridge plot were drawn outside the panel and
+  clipped; they now sit just inside the left edge of each row.
+* The static (PDF) marker ridge plot drew traced cells at the values of
+  other cells whenever not every selected cell was extreme: trace values
+  were looked up by the cell's position among the extreme cells instead of
+  among all selected cells.
+* The interactive ridge plot's outlier dots showed another marker's value
+  when rows were sorted by separation (values were read by row position
+  instead of marker name).
+* Selection observers registered in a loop (SOM main plot, t-SNE, UMAP,
+  PCA) now force their source id, so each listens to its own plot.
+* Selecting many SOM nodes crashed the app ("C stack usage too close to
+  the limit"): the ridge cluster picker pre-selected every selected node,
+  drawing one density line per node and row (thousands of plotly traces).
+  The picker now pre-selects the five largest nodes and accepts at most 20,
+  and both ridge plots cap individual node lines at 20.
+* The ridge cluster picker offered the clusters of the cells whose column
+  index equalled a selected node id instead of the selected nodes.
+* The "Rest" group vanished after the first group was named or removed:
+  `.rebuildOutputList()` counted the previous Rest as used, so the new Rest
+  was always empty.
+* The FlowSOM marker pie output was sized for all selected nodes (up to
+  8000 px high) although at most "Max pies" pies are drawn.
+
+## Internal changes
+
+* The Shiny server is restructured: all per-session state (static data,
+  reactive values, reactives) lives in one environment built in stages by
+  small builders (`.initServerState()`, `.build*Reactives()`), and the
+  observer and output registrars are split into per-feature functions
+  that take this state instead of ~50 positional arguments. The state is
+  still exposed by name inside the server function, so `testServer()`
+  expressions keep working.
+* Every function is now at most 50 lines (BiocCheck recommendation), all R
+  sources and vignette code use 4-space indents, and no line exceeds 80
+  characters. Long plot, UI and preparation functions were split into
+  documented helpers; repeated code (violin data, tooltip wrappers, zoom
+  limits, customdata selection observers) is shared.
+* Blanket `suppressWarnings()` / `suppressMessages()` calls are replaced by
+  targeted handling: `.asIntegerQuiet()` parses node ids without coercion
+  warnings, and the plotly conversion muffles only its known harmless
+  warnings and its messages.
+* PDF export draws plots with `methods::show()` instead of `print()`;
+  `prepClusterSelector()` builds the dendrogram table without `<<-` and has
+  a runnable example; unused pre-computations (per-channel limits, raster
+  plot) were removed from the app builder.
+
+## Bioconductor checks
+
+* `R CMD check`: 0 errors, 0 warnings, 0 notes. Fixed: `ggridges` is now
+  imported explicitly (`importFrom(ggridges, GeomRidgeline)`), the aes
+  column names of `plotRidgeTraceFunc()` are declared in
+  `utils::globalVariables()`, the duplicated `GeomRidgelineTraced` Rd
+  alias is merged into `geom_ridgeline_traced.Rd`, `intro.html` plus the
+  non-vignette files in `vignettes/` are excluded via `.Rbuildignore`,
+  and the two remaining literal non-ASCII characters in `R/` are now
+  `\uXXXX` escapes.
+* `BiocCheck::BiocCheck()`: 0 errors, 0 warnings. The only remaining NOTEs
+  are the roxygen2/`R CMD build`-generated `NAMESPACE` and `\usage{}`
+  indentation (not hand-editable), the optional `fnd` Authors@R role, an
+  optional biocViews suggestion, and the Bioc-Devel mailing list check
+  (requires admin credentials to verify).
+
+# CySA 0.99.33
+
+## User-interface improvements
+
+* The marker ridge plot no longer draws the connecting trace lines between
+  marker rows: the outlier dots (one per traced cell and marker, sitting on
+  the cluster ridge) remain, but the polylines cluttered the joyplot.
+  `plotRidgeTraceFunc()` gained a `showTraces` argument (default `TRUE`)
+  to bring the lines back if wanted.
+
+# CySA 0.99.32
+
+## Bug fixes
+
+* Resizing plots no longer loops endlessly. `shinyjqui::jqui_resizable()`
+  wraps outputs sized 100% of their parent; for outputs hidden at wrap
+  time (collapsed boxes such as "marker ridge") the parent height is
+  auto, making the wrapper content-driven: each render re-reported a new
+  size and re-rendered the plot. Plot outputs are now pinned to a fixed
+  pixel height by CSS, the window-resize script no longer re-imposes
+  100% heights (width only), and the ridge plot is rendered at a fixed
+  resolution so size changes are handled client-side instead of
+  triggering server re-renders.
+
+# CySA 0.99.31
+
+## User-interface improvements
+
+* The marker ridge plot now renders per-cluster densities as stacked
+  joyplot ridges: each selected cluster's filled density curve is offset
+  above the row base (classic ridgeline style), with the thicker black
+  "combined" line sitting on the base of the row. Row heights account for
+  the cluster-stack height so bands never overlap the row above.
+
+## Bug fixes
+
+* Trace vertices in the marker ridge plot were looked up by exact match on
+  the density grid; a cell's value almost never falls exactly on a grid
+  point, so every trace collapsed flat at the row base. Trace vertices are
+  now interpolated (`stats::approx`) at the cell's value and sit on their
+  cluster's density curve.
+* The version tag in the dashboard header ("CySA x.y.z") is now rendered on
+  its own line: it was previously appended inline after the title and got
+  clipped off by the fixed-width AdminLTE logo box (`overflow: hidden`).
+  The logo box also relaxes its inherited 50px line-height so both the
+  title and the version line fit inside the 50px header.
+* Cluster density lines and traces in the marker ridge plot now use whole
+  Set2 brewer colours instead of interpolated ones: `colorRampPalette`
+  produced washed-out greys for small numbers of clusters (e.g. grey
+  #B3B3B3 for the second cluster), making clusters and traces nearly
+  indistinguishable from the background.
+
+# CySA 0.99.30
+
+## User-interface improvements
+
+* The marker ridge plot now distinguishes selected clusters: each selected
+  cluster gets its own solid density line (capped at five; with more, the
+  user picks which clusters get individual lines through a new picker that
+  appears only in that case), plus a thicker black "combined" line pooling
+  all selected clusters. The pastel background remains the full-dataset
+  density.
+* Trace lines and outlier dots are coloured by the traced cell's cluster,
+  so multi-cluster selections remain distinguishable; the combined line is
+  drawn thicker (1.1 vs 0.7) so the aggregate reads as one.
+* Fixed duplicate ggplot colour scales that flooded the log with
+  "Adding another scale for colour" warnings and silently dropped
+  selected-cluster density rows; all ridge layers now share one unified
+  colour scale.
+
+# CySA 0.99.29
+
+## User-interface improvements
+
+* The dashboard header now shows the running package version
+  (e.g. "Cluster Selector CySA 0.99.29") so users and bug reports always
+  reference the right build.
+* The marker ridge plot is debounced (500 ms) so dragging a resizable
+  corner does not continuously re-render the plot while resizing.
+
 # CySA 0.99.8
 
 ## User-interface improvements
@@ -9,6 +289,17 @@
 * Added selection hints to all plot outputs that support click/lasso
   selection.
 * Extended roxygen comments for all UI builder helpers in `R/ui-helpers.R`.
+* Added a "marker ridge" box: one row per selected marker showing the density
+  of all cells (filled pastel) and of the currently selected clusters (solid
+  line), with dashed threshold lines at `mean +/- threshold * sd` and capped
+  trace lines connecting extreme cells across the marker rows. Each traced
+  cell is also marked with a dot at its value in every row, and traces are
+  coloured by the marker on which a cell deviates most, making it easy to
+  see why an outlying cell belongs to the selection. Rows carry headroom so
+  the ridgeline bands stay separated.
+* Fixed a crash in the marker ridge trace extraction when the assay matrix
+  has missing or misaligned cell colnames: trace values are now read by
+  position instead of by cell name.
 
 # CySA 0.99.7
 

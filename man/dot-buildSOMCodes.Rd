@@ -13,7 +13,8 @@
 }
 \arguments{
 \item{sce}{A \code{SingleCellExperiment} with \code{cluster_id} in
-\code{colData} and SOM codes stored in \code{metadata(sce)[[somCodesName]]}.}
+\code{colData} and SOM codes stored in
+\code{metadata(sce)[[somCodesName]]}.}
 
 \item{somCodesName}{Name of the SOM codes metadata slot.}
 

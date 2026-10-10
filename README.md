@@ -1,23 +1,35 @@
----
-output: github_document
----
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
-
-# CySA
 
 # cysa
 
 <!-- badges: start -->
-[![Bioconductor devel build](https://bioconductor.org/shields/build/devel/bioc/cysa.svg)](https://bioconductor.org/checkResults/release/bioc-LATEST/cysa/)
-[![Bioconductor release build](https://bioconductor.org/shields/build/release/bioc/cysa.svg)](https://bioconductor.org/checkResults/release/bioc-LATEST/cysa/)
-[![Bioconductor version](https://bioconductor.org/shields/years-in-bioc/cysa.svg)](https://bioconductor.org/packages/release/bioc/html/cysa.html)
-[![Bioconductor downloads](https://bioconductor.org/shields/downloads/release/cysa.svg)](https://bioconductor.org/packages/release/bioc/html/cysa.html)
+
+[![Bioconductor devel
+build](https://bioconductor.org/shields/build/devel/bioc/cysa.svg)](https://bioconductor.org/checkResults/release/bioc-LATEST/cysa/)
+[![Bioconductor release
+build](https://bioconductor.org/shields/build/release/bioc/cysa.svg)](https://bioconductor.org/checkResults/release/bioc-LATEST/cysa/)
+[![Bioconductor
+version](https://bioconductor.org/shields/years-in-bioc/cysa.svg)](https://bioconductor.org/packages/release/bioc/html/cysa.html)
+[![Bioconductor
+downloads](https://bioconductor.org/shields/downloads/release/cysa.svg)](https://bioconductor.org/packages/release/bioc/html/cysa.html)
 <!-- badges: end -->
 
-**CySA** provides an interactive Shiny application for selecting and visualizing clusters from flow-cytometry data stored in [`SingleCellExperiment`](https://bioconductor.org/packages/SingleCellExperiment) objects. It is designed to work with SOM-based clustering outputs such as those produced by [FlowSOM](https://bioconductor.org/packages/FlowSOM) and curated by the [CATALYST](https://bioconductor.org/packages/CATALYST) workflow.
+**CySA** provides an interactive Shiny application for selecting and
+visualizing clusters from flow-cytometry data stored in
+[`SingleCellExperiment`](https://bioconductor.org/packages/SingleCellExperiment)
+objects. It is designed to work with SOM-based clustering outputs such
+as those produced by
+[FlowSOM](https://bioconductor.org/packages/FlowSOM) and curated by the
+[CATALYST](https://bioconductor.org/packages/CATALYST) workflow.
 
-![CySA main interface showing SOM cluster visualization with manual gating, dimension reduction plots, and marker expression heatmaps](man/figures/README-som-pairs-grid.png)
+<figure>
+<img src="man/figures/README-som-pairs-grid.png"
+alt="CySA main interface showing SOM cluster visualization with manual gating, dimension reduction plots, and marker expression heatmaps" />
+<figcaption aria-hidden="true">CySA main interface showing SOM cluster
+visualization with manual gating, dimension reduction plots, and marker
+expression heatmaps</figcaption>
+</figure>
 
 ## Installation
 
@@ -56,36 +68,98 @@ shiny::runApp(app)
 
 ## Screenshots
 
-The app is organized into linked panels for gating, SOM-based clustering, and downstream statistics.
+The app is organized into linked panels for gating, SOM-based
+clustering, and downstream statistics.
 
 ### Manual gating and hierarchical clustering
 
-Select cells directly on a 2D scatter plot, or select whole SOM clusters from an interactive dendrogram:
+Select cells directly on a 2D scatter plot, or select whole SOM clusters
+from an interactive dendrogram:
 
-<img src="man/figures/README-2d-plot.png" width="49%"/> <img src="man/figures/README-dendrogram.png" width="49%"/>
+<img src="man/figures/README-2d-plot.png" width="49%"/>
+<img src="man/figures/README-dendrogram.png" width="49%"/>
 
 ### SOM node views and dimension reduction
 
-SOM nodes can be explored in raw marker space or via t-SNE/UMAP/PCA projections of the SOM code vectors, with the current selection highlighted consistently across views:
+SOM nodes can be explored in raw marker space or via t-SNE/UMAP/PCA
+projections of the SOM code vectors, with the current selection
+highlighted consistently across views:
 
-<img src="man/figures/README-som-2d-plots.png" width="49%"/> <img src="man/figures/README-dimreduction.png" width="49%"/>
+<img src="man/figures/README-som-2d-plots.png" width="49%"/>
+<img src="man/figures/README-dimreduction.png" width="49%"/>
 
 ### Marker-level exploration of a selection
 
-All marker-pair combinations, per-node marker pie charts, and SOM heatmaps help characterize the phenotype of a selected cluster:
+All marker-pair combinations, per-node marker pie charts, and SOM
+heatmaps help characterize the phenotype of a selected cluster:
 
-<img src="man/figures/README-som-pairs-grid.png" width="100%"/> <img src="man/figures/README-marker-pies.png" width="100%"/> <img src="man/figures/README-som-heatmaps.png" width="100%"/>
+<img src="man/figures/README-som-pairs-grid.png" width="100%"/>
+<img src="man/figures/README-marker-pies.png" width="100%"/>
+<img src="man/figures/README-som-heatmaps.png" width="100%"/>
+
+### Outliers and node membership
+
+The marker ridge box shows, per marker, the density of all cells and of
+the selection, a band holding the central 99% of the selected cells, and
+the selected cells outside that band as clickable dots. Clicking a dot
+traces the cell across all markers and explains which clustering markers
+keep it in its SOM node rather than in the nearest node outside the
+selection:
+
+<img src="man/figures/README-marker-ridge.png" width="100%"/>
 
 ### Statistics
 
-Selected clusters can be compared between sample groups (e.g. control vs. treated) with per-sample counts, percentages, and a two-sample t-test:
+Selected clusters can be compared between sample groups (e.g. control
+vs. treated) with per-sample counts, percentages, and a two-sample
+t-test:
 
 <img src="man/figures/README-stats-panel.png" width="100%"/>
 
+### Sample diagnostics, cluster comparison, and differential testing
+
+Three panels reproduce the sample-level QC and differential-testing
+figures of the reference CATALYST/diffcyt CyTOF workflow inside CySA
+itself (see `vignettes/catalyst_workflow.Rmd`), each restricted to a
+chosen selection of saved clusters/metaclusters rather than always using
+every cell:
+
+**Sample diagnostics** – a pseudobulk MDS plot of the samples and a
+per-sample marker-expression heatmap (plus marker non-redundancy scores,
+not shown), letting you see how samples separate within a chosen cell
+population:
+
+<img src="man/figures/README-diagnostics-mds.png" width="49%"/>
+<img src="man/figures/README-diagnostics-heatmap.png" width="49%"/>
+
+**Ordered cluster heatmap** – a dendrogram-ordered marker-by-cluster
+heatmap with a cell-count bar, for comparing marker profiles across a
+chosen set of clusters/metaclusters and markers side by side:
+
+<img src="man/figures/README-ordered-heatmap.png" width="100%"/>
+
+**Differential testing (diffcyt)** – GLMM-based differential abundance
+and LMM-based differential state tests comparing chosen saved groups
+across samples, with a results heatmap:
+
+<img src="man/figures/README-diff-test.png" width="100%"/>
+
+Every box in the dashboard also has an info button (the small circled
+“i” next to its title) that opens a modal explaining what the box does,
+what to expect, how to use it, and what it requires:
+
+<img src="man/figures/README-info-modal.png" width="75%"/>
+
 ## Provenance
 
-CySA is derived from the `clusterSelector` Shiny module originally developed in `CyDa`. The code was subsequently extracted into a standalone Bioconductor package and refactored with assistance from the opencode AI coding assistant. All redistributed and AI-assisted code remains under the package license (see `LICENSE`) and the maintainer is responsible for its maintenance.
+CySA is derived from the `clusterSelector` Shiny module originally
+developed in `CyDa`. The code was subsequently extracted into a
+standalone Bioconductor package and refactored with assistance from the
+opencode AI coding assistant. All redistributed and AI-assisted code
+remains under the package license (see `LICENSE`) and the maintainer is
+responsible for its maintenance.
 
 ## Citation
 
-If you use CySA in your research, please cite the package and the relevant Bioconductor workflows.
+If you use CySA in your research, please cite the package and the
+relevant Bioconductor workflows.

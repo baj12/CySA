@@ -120,6 +120,54 @@ test_that(".computeRelativeCounts() with outputList group uses group counts", {
 })
 
 
+test_that(".computeRelativeCounts() ignores stale node ids in a saved group", {
+  # Regression: a saved group referencing a node id that no longer exists
+  # (e.g. saved before revalidation, or from a different SOM) crashed with
+  # "subscript out of bounds" instead of being ignored.
+  clusterPatientTable <- matrix(
+    c(100, 200, 150, 50, 100, 100),
+    nrow = 3, ncol = 2,
+    dimnames = list(c("S1", "S2", "S3"), c("1", "2"))
+  )
+  rs <- c("1")
+  expInfo <- data.frame(sample_id = c("S1", "S2", "S3"), stringsAsFactors = FALSE)
+  outputList <- list(RefGroup = c("1", "2", "99999"))
+
+  result <- expect_no_error(
+    .computeRelativeCounts(clusterPatientTable, rs, "RefGroup", expInfo, outputList)
+  )
+  # Same result as if "99999" had never been in the group.
+  expect_equal(unname(result), c(100 / 150 * 100, 200 / 300 * 100, 150 / 250 * 100))
+})
+
+
+test_that(".computeRelativeCounts() ignores a stale id in rs itself", {
+  clusterPatientTable <- matrix(
+    c(100, 200, 150, 50, 100, 100),
+    nrow = 3, ncol = 2,
+    dimnames = list(c("S1", "S2", "S3"), c("1", "2"))
+  )
+  expInfo <- data.frame(sample_id = c("S1", "S2", "S3"), stringsAsFactors = FALSE)
+
+  result <- expect_no_error(
+    .computeRelativeCounts(clusterPatientTable, c("1", "99999"), "none", expInfo, list())
+  )
+  expect_equal(unname(result), c(100 / 150 * 100, 200 / 300 * 100, 150 / 250 * 100))
+})
+
+
+# =============================================================================
+# .validNodeCols()
+# =============================================================================
+
+test_that(".validNodeCols() keeps only ids that are columns of clusterPatientTable", {
+  cpt <- matrix(1, nrow = 1, ncol = 3, dimnames = list("S1", c("1", "2", "5")))
+  expect_equal(.validNodeCols(c(1L, 2L, 5L, 99L), cpt), c(1L, 2L, 5L))
+  expect_equal(.validNodeCols(c(99L, NA_integer_), cpt), integer(0))
+  expect_equal(.validNodeCols(integer(0), cpt), integer(0))
+})
+
+
 test_that(".computeRelativeCounts() errors when relativeToCol not found", {
   clusterPatientTable <- matrix(
     c(100, 200, 150, 50, 100, 100),
@@ -316,4 +364,13 @@ test_that(".inputSelect() with all invalid node_ids returns rs", {
   result <- .inputSelect(d, rs, "view")
 
   expect_equal(result, c(1L, 2L))
+})
+
+test_that(".rebuildOutputList() recomputes a stale Rest instead of dropping it", {
+    # Regression: the previous Rest counted as "used", so after naming a
+    # group Rest became empty and disappeared from all group pickers.
+    ol <- list(Rest = 1:10, selected = 3:4, grpA = 3:4)
+    result <- .rebuildOutputList(ol, as.character(1:10))
+    expect_equal(result$Rest, c(1L, 2L, 5:10))
+    expect_equal(result$grpA, 3:4)
 })

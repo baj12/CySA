@@ -7,7 +7,8 @@
 .buildSixStaticSOMBox(markers, dList)
 }
 \arguments{
-\item{markers}{Character vector of all available markers (\code{rownames(sce)}).}
+\item{markers}{Character vector of all available markers
+(\code{rownames(sce)}).}
 
 \item{dList}{Initial list of marker pairs.}
 }

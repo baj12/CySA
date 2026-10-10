@@ -7,7 +7,8 @@
 .buildSOMRasterSelectPlot(somRasterData, rs)
 }
 \arguments{
-\item{somRasterData}{Data frame containing \code{x} and \code{y} grid columns.}
+\item{somRasterData}{Data frame containing \code{x} and \code{y} grid
+columns.}
 
 \item{rs}{Selected SOM node ids.}
 }

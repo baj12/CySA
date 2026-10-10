@@ -24,6 +24,8 @@
 
 \item{rsUsed}{Reactive value holding the currently selected nodes.}
 
+\item{rsUsed_d}{Debounced reactive read as the selection baseline.}
+
 \item{activePlot}{Reactive value tracking the active plot index.}
 
 \item{inputSelect}{Function that maps event data to new selected ids.}

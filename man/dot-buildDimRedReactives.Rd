@@ -16,7 +16,8 @@
 \item{somCodesName}{Name of the SOM codes metadata slot.}
 }
 \value{
-A named list of three reactives: \code{tsne}, \code{umap}, \code{pca}.
+A named list of three reactives: \code{tsne}, \code{umap},
+\code{pca}.
 }
 \description{
 Creates the t-SNE, UMAP, and PCA reactives used by the clusterSelector app.

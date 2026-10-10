@@ -19,12 +19,7 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Bernd Jagla \email{bernd.jagla@pasteur.fr} (\href{https://orcid.org/0000-0002-7696-0484}{ORCID})
-
-Authors:
-\itemize{
-  \item Bernd Jagla \email{bernd.jagla@pasteur.fr} (\href{https://orcid.org/0000-0002-7696-0484}{ORCID})
-}
-
+Bernd Jagla \email{bernd.jagla@pasteur.fr}
+(\href{https://orcid.org/0000-0002-7696-0484}{ORCID}), maintainer.
 }
 \keyword{internal}

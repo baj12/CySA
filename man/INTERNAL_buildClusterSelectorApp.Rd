@@ -62,6 +62,6 @@ FlowSOM star plot is shown.}
 A named list with elements \code{ui} and \code{server}.
 }
 \description{
-Build clusterSelector UI and Server
+Creates the UI/server pair for the clusterSelector Shiny app.
 }
 \keyword{internal}

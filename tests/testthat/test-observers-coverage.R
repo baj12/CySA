@@ -112,7 +112,7 @@ test_that("observers: groupsVar updates group1 and group2 choices", {
   )
 
   shiny::testServer(test_app$app, {
-    session$setInputs(groupsVar = factor_col)
+    suppress_plotly_event_warnings(session$setInputs(groupsVar = factor_col))
 
     expect_true("group1" %in% names(calls))
     expect_true("group2" %in% names(calls))

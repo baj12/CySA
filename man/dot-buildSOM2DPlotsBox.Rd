@@ -13,7 +13,8 @@
 
 \item{outputList}{Named list of cluster groupings.}
 
-\item{markers}{Character vector of all available markers (\code{rownames(sce)}).}
+\item{markers}{Character vector of all available markers
+(\code{rownames(sce)}).}
 
 \item{dList}{List of marker pairs used to populate the preset-pair picker.}
 }

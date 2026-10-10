@@ -5,87 +5,15 @@
 \alias{.registerClusterSelectorObservers}
 \title{Register clusterSelector Observers}
 \usage{
-.registerClusterSelectorObservers(
-  input,
-  output,
-  session,
-  rv,
-  rsUsed,
-  rsUsed_d,
-  activePlot,
-  dListRV,
-  dimSelection,
-  triggerRedraw,
-  selectedUpdate2,
-  selectedUpdate,
-  updatedoutputList,
-  sample2PlotDb,
-  dfPlot,
-  groupsInput,
-  inputClusterNumber,
-  zoomFunc,
-  sce,
-  sce_subsampled,
-  metaD,
-  dend,
-  dendTable,
-  clusterPatientTable,
-  somCodesName,
-  colsUsed,
-  nPlots,
-  verbose,
-  fsom = NULL,
-  env
-)
+.registerClusterSelectorObservers(input, output, session, st)
 }
 \arguments{
 \item{input, output, session}{Shiny objects.}
 
-\item{rv}{Reactive values object holding \code{outputList}.}
-
-\item{rsUsed, rsUsed_d}{Reactive values for the current node selection.}
-
-\item{activePlot}{Reactive value tracking the active SOM plot.}
-
-\item{dListRV}{Reactive value holding the list of marker pairs.}
-
-\item{dimSelection}{Reactive value holding per-plot axis limits.}
-
-\item{triggerRedraw}{Reactive value used to force plot redraws.}
-
-\item{selectedUpdate2, selectedUpdate}{Reactive counters for invalidation.}
-
-\item{updatedoutputList}{Function that updates UI choices from outputList.}
-
-\item{sample2PlotDb}{Debounced reactive of samples to plot.}
-
-\item{dfPlot}{Reactive data frame for the scatter plot.}
-
-\item{groupsInput}{Debounced reactive of sample-group selections.}
-
-\item{inputClusterNumber}{Debounced reactive of typed cluster ids.}
-
-\item{zoomFunc}{Function handling plotly zoom relayout events.}
-
-\item{sce}{Full \code{SingleCellExperiment}.}
-
-\item{sce_subsampled}{Subsampled \code{SingleCellExperiment}.}
-
-\item{metaD}{\code{metadata(sce)} list.}
-
-\item{dend}{Dendrogram object.}
-
-\item{dendTable}{Data frame for dendrogram navigation.}
-
-\item{clusterPatientTable}{Table of sample by cluster counts.}
-
-\item{somCodesName}{Name of the SOM codes metadata slot.}
-
-\item{colsUsed}{Character vector of SOM columns used.}
-
-\item{nPlots}{Number of 2D SOM plots.}
-
-\item{verbose}{Logical indicating whether to print debug messages.}
+\item{st}{Server state environment (see \code{.initServerState()}).}
+}
+\value{
+Called for its side effects.
 }
 \description{
 Attaches all \verb{shiny::observe*} calls used by the clusterSelector app.

@@ -25,7 +25,8 @@ A data frame or \code{NULL} on failure.
 \description{
 Constructs the per-SOM-node data frame that \code{drawProjection} expects:
 the two requested channel columns come first, followed by all SOM_stats
-columns.  Reads coordinates directly from \code{metadata(sce)[[somCodesName]]}
+columns.  Reads coordinates directly from
+\code{metadata(sce)[[somCodesName]]}
 instead of parsing \code{ggplot_build()} output, which is both faster and
 independent of which aesthetics the base plot happens to expose.
 }

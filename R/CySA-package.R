@@ -9,6 +9,9 @@
 #' clusters from flow cytometry data stored in \code{SingleCellExperiment}
 #' objects.
 #'
+#' @author Bernd Jagla \email{bernd.jagla@pasteur.fr}
+#'   (\href{https://orcid.org/0000-0002-7696-0484}{ORCID}), maintainer.
+#'
 #' @keywords internal
 #'
 #' @import shiny
@@ -109,10 +112,10 @@ options(agg.max_dim = 10000)
 #'
 #' @export
 CySA_default_cluster_cols <- function() {
-  c(
-    "#DC050C", "#FB8072", "#1965B0", "#7BAFDE", "#882E72", "#B17BA6",
-    "#FF7F00", "#FDB462", "#E7298A", "#E78AC3", "#33A02C", "#B2DF8A",
-    "#55A1B1", "#8DD3C7", "#A6761D", "#E6AB02", "#7570B3", "#BEAED4",
-    "#666666", "#999999"
-  )
+    c(
+        "#DC050C", "#FB8072", "#1965B0", "#7BAFDE", "#882E72", "#B17BA6",
+        "#FF7F00", "#FDB462", "#E7298A", "#E78AC3", "#33A02C", "#B2DF8A",
+        "#55A1B1", "#8DD3C7", "#A6761D", "#E6AB02", "#7570B3", "#BEAED4",
+        "#666666", "#999999"
+    )
 }

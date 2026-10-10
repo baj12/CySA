@@ -47,6 +47,10 @@ screen (i.e. \code{dListRV()}) -- ALL pairs, not just the active plot.}
 used to build each SOM panel's base plot, matching whatever the live
 static-grid renderer uses.}
 
+\item{dlColorVar, dlSizeVar}{SOM statistic used for point colour / size.}
+
+\item{pctl}{Central fraction of the SOM codes kept by the axis limits.}
+
 \item{somRasterXy}{Data frame of selected-node raster coordinates (or
 \code{NULL}).}
 

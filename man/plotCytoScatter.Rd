@@ -42,7 +42,8 @@ dimensions are zero.}
 
 \item{k_pal}{Color palette used when \code{color_by} is a clustering.}
 
-\item{rownms}{Optional character vector used instead of \code{rownames(x)} for
+\item{rownms}{Optional character vector used instead of
+\code{rownames(x)} for
 matching \code{chs}.}
 }
 \value{

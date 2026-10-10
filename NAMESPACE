@@ -9,99 +9,166 @@ export(prepClusterSelector)
 export(prepClusterSelectorData)
 import(ggplot2)
 import(shiny)
-importFrom(CATALYST,channels)
-importFrom(CATALYST,cluster_codes)
-importFrom(CATALYST,cluster_ids)
-importFrom(DT,DTOutput)
-importFrom(DT,renderDT)
+importFrom(CATALYST,
+  channels,
+  cluster_codes,
+  cluster_ids
+)
+importFrom(DT,
+  DTOutput,
+  renderDT
+)
 importFrom(Matrix,rowSums)
 importFrom(RColorBrewer,brewer.pal)
 importFrom(Rtsne,Rtsne)
 importFrom(S4Vectors,metadata)
-importFrom(SingleCellExperiment,colData)
-importFrom(SingleCellExperiment,int_colData)
-importFrom(SummarizedExperiment,assay)
-importFrom(SummarizedExperiment,assays)
-importFrom(SummarizedExperiment,colData)
-importFrom(collapsibleTree,collapsibleTreeOutput)
-importFrom(collapsibleTree,renderCollapsibleTree)
+importFrom(SingleCellExperiment,
+  colData,
+  int_colData
+)
+importFrom(SummarizedExperiment,
+  assay,
+  assays,
+  colData
+)
+importFrom(collapsibleTree,
+  collapsibleTreeOutput,
+  renderCollapsibleTree
+)
 importFrom(cowplot,theme_cowplot)
 importFrom(data.table,rbindlist)
-importFrom(dplyr,`%>%`)
-importFrom(dplyr,as_tibble)
-importFrom(dplyr,count)
-importFrom(dplyr,filter)
-importFrom(dplyr,group_by)
-importFrom(dplyr,join_by)
-importFrom(dplyr,left_join)
-importFrom(dplyr,mutate)
-importFrom(dplyr,n)
-importFrom(dplyr,pull)
-importFrom(dplyr,summarise)
-importFrom(dplyr,ungroup)
-importFrom(ggplot2,aes)
-importFrom(ggplot2,element_blank)
-importFrom(ggplot2,element_rect)
-importFrom(ggplot2,element_text)
-importFrom(ggplot2,facet_grid)
-importFrom(ggplot2,facet_wrap)
-importFrom(ggplot2,geom_point)
-importFrom(ggplot2,geom_tile)
-importFrom(ggplot2,ggplot)
-importFrom(ggplot2,guide_legend)
-importFrom(ggplot2,guides)
-importFrom(ggplot2,scale_color_gradientn)
-importFrom(ggplot2,scale_color_manual)
-importFrom(ggplot2,scale_fill_gradientn)
-importFrom(ggplot2,theme)
-importFrom(ggplot2,theme_bw)
-importFrom(ggplot2,vars)
-importFrom(ggplot2,ylab)
-importFrom(grDevices,colorRampPalette)
-importFrom(grDevices,dev.off)
-importFrom(grDevices,pdf)
+importFrom(dplyr,
+  `%>%`,
+  as_tibble,
+  count,
+  filter,
+  group_by,
+  join_by,
+  left_join,
+  mutate,
+  n,
+  pull,
+  summarise,
+  ungroup
+)
+importFrom(ggplot2,
+  Geom,
+  StatIdentity,
+  aes,
+  alpha,
+  coord_munch,
+  element_blank,
+  element_rect,
+  element_text,
+  facet_grid,
+  facet_wrap,
+  fill_alpha,
+  geom_point,
+  geom_segment,
+  geom_text,
+  geom_tile,
+  ggplot,
+  ggproto,
+  guide_legend,
+  guides,
+  labs,
+  layer,
+  scale_alpha_identity,
+  scale_color_gradientn,
+  scale_color_manual,
+  scale_colour_manual,
+  scale_fill_gradientn,
+  scale_fill_manual,
+  scale_linewidth_identity,
+  scale_y_continuous,
+  theme,
+  theme_bw,
+  theme_void,
+  vars,
+  xlab,
+  ylab
+)
+importFrom(ggridges,GeomRidgeline)
+importFrom(grDevices,
+  colorRampPalette,
+  dev.off,
+  pdf
+)
 importFrom(graphics,points)
-importFrom(grid,unit)
-importFrom(plotly,add_trace)
-importFrom(plotly,config)
-importFrom(plotly,event_data)
-importFrom(plotly,event_register)
-importFrom(plotly,ggplotly)
-importFrom(plotly,layout)
-importFrom(plotly,plotlyOutput)
-importFrom(plotly,renderPlotly)
-importFrom(purrr,imap)
-importFrom(purrr,is_empty)
-importFrom(purrr,map2)
-importFrom(purrr,set_names)
+importFrom(grid,
+  gpar,
+  grobName,
+  grobTree,
+  nullGrob,
+  pointsGrob,
+  polylineGrob,
+  unit
+)
+importFrom(plotly,
+  add_trace,
+  config,
+  event_data,
+  event_register,
+  ggplotly,
+  layout,
+  plotlyOutput,
+  renderPlotly
+)
+importFrom(purrr,
+  imap,
+  is_empty,
+  map2,
+  set_names
+)
 importFrom(raster,plot)
 importFrom(reshape2,melt)
-importFrom(rlang,.data)
-importFrom(rlang,sym)
-importFrom(shinydashboard,dashboardBody)
-importFrom(shinydashboard,dashboardHeader)
-importFrom(shinydashboard,dashboardPage)
-importFrom(shinydashboard,dashboardSidebar)
-importFrom(shinydashboard,menuItem)
-importFrom(shinydashboard,sidebarMenu)
-importFrom(shinyjs,extendShinyjs)
-importFrom(shinyjs,useShinyjs)
-importFrom(stats,prcomp)
-importFrom(stats,quantile)
-importFrom(stats,reorder)
-importFrom(stats,sd)
-importFrom(stats,setNames)
-importFrom(stats,t.test)
-importFrom(stringr,str_replace)
-importFrom(stringr,str_split)
+importFrom(rlang,
+  .data,
+  sym
+)
+importFrom(shinydashboard,
+  dashboardBody,
+  dashboardHeader,
+  dashboardPage,
+  dashboardSidebar,
+  menuItem,
+  sidebarMenu
+)
+importFrom(shinyjs,
+  extendShinyjs,
+  useShinyjs
+)
+importFrom(stats,
+  approx,
+  complete.cases,
+  density,
+  prcomp,
+  quantile,
+  reorder,
+  sd,
+  setNames,
+  t.test
+)
+importFrom(stringr,
+  str_replace,
+  str_split
+)
 importFrom(tibble,as_tibble)
-importFrom(tidyr,all_of)
-importFrom(tidyr,pivot_longer)
+importFrom(tidyr,
+  all_of,
+  pivot_longer
+)
 importFrom(tidyselect,all_of)
-importFrom(umap,umap)
-importFrom(umap,umap.defaults)
-importFrom(utils,globalVariables)
-importFrom(utils,head)
-importFrom(utils,str)
-importFrom(viridis,scale_fill_viridis)
-importFrom(viridis,viridis)
+importFrom(umap,
+  umap,
+  umap.defaults
+)
+importFrom(utils,
+  globalVariables,
+  head,
+  str
+)
+importFrom(viridis,
+  scale_fill_viridis,
+  viridis
+)

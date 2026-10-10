@@ -34,4 +34,13 @@ vignettes/introduction.Rmd
 \*\.shiny.R
 local
 CySA.proj
-
+^intro\.html$
+^vignettes/FlowSOMmary\.pdf$
+^vignettes/perf-analysis\.md$
+^bioc_submission_checks\.R$
+^bioc_submission_checks\.out$
+^vignettes/test_datasets\.Rmd$
+^\.posit$
+^\.posit/assistant$
+^vignettes/catalyst_workflow\.Rmd$
+^vignettes/support$

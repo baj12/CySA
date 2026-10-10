@@ -1,6 +1,6 @@
 Package: CySA
 Title: Interactive Cluster Selector for Cytometry Data
-Version: 0.99.28
+Version: 0.99.36
 Authors@R:
     person("Bernd", "Jagla", , "bernd.jagla@pasteur.fr", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-7696-0484"))
@@ -14,13 +14,14 @@ Description: CySA provides an interactive Shiny-based tool for analyzing
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 8.0.0
-biocViews: SingleCell, FlowCytometry, Clustering, Visualization, ShinyApps
+biocViews: SingleCell, FlowCytometry, Clustering, DimensionReduction,
+    Visualization, ShinyApps
 URL: https://github.com/baj12/CySA
 BugReports: https://github.com/baj12/CySA/issues
 Depends:
-    R (>= 4.5.0)
+    R (>= 4.6.0)
 Imports:
+    methods,
     shiny,
     shinydashboard,
     shinydashboardPlus,
@@ -36,6 +37,7 @@ Imports:
     RColorBrewer,
     CATALYST,
     FlowSOM,
+    diffcyt,
     dplyr,
     tidyr,
     tibble,
@@ -46,6 +48,7 @@ Imports:
     rlang,
     raster,
     ggplot2,
+    ggridges,
     plotly,
     viridis,
     dendextend,
@@ -65,3 +68,4 @@ Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 VignetteBuilder: knitr
+Config/roxygen2/version: 8.1.0

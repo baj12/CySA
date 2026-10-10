@@ -1,0 +1,502 @@
+---
+title: "Reproducing the CATALYST/CyTOF workflow with CySA"
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE,
+    fig.width = 7, fig.height = 5
+)
+```
+
+## Overview
+
+This vignette reproduces the core analyses of the CATALYST/CyTOF differential
+discovery workflow -- Nowicka *et al.* 2017/2019, *"CyTOF workflow:
+differential discovery in high-throughput high-dimensional cytometry
+datasets"*, F1000Research 6:748 (a copy of the v4 manuscript is included at
+`vignettes/support/`) -- on the same public PBMC/BCR-XL dataset (Bodenmiller
+*et al.* 2012), using the reference implementation (`CATALYST` + `diffcyt` +
+`ConsensusClusterPlus`), and then shows the same clustering inside **CySA**.
+
+Every code chunk below was run against the actually installed package
+versions and the real dataset before being written down (not merely
+transcribed from the paper); two real incompatibilities between the 2019
+paper's code and current Bioconductor releases were found and are called out
+where they occur. This is not a Bioconductor-submission vignette (it depends
+on `HDCytoData`/`ExperimentHub` downloads and takes a couple of minutes to
+run); see the note at the end on how it is packaged.
+
+We use the exact parameters the paper specifies:
+
+- arcsinh transformation with **cofactor 5** for all channels (the CyTOF
+  standard; `CATALYST::prepData()`'s own default),
+- FlowSOM grid **10 x 10** (100 codes), `ConsensusClusterPlus` **maxK = 20**,
+  **seed = 1234**,
+- 10 lineage ("type") markers for clustering, 14 functional/signaling
+  ("state") markers for differential-state analysis.
+
+```{r libs}
+library(HDCytoData)
+library(CATALYST)
+library(diffcyt)
+library(SingleCellExperiment)
+library(SummarizedExperiment)
+library(S4Vectors)
+library(CySA)
+```
+
+## Data import
+
+`HDCytoData::Bodenmiller_BCR_XL_SE()` gives the same 8-donor,
+Reference-vs-BCR/FcR-XL subset the paper uses (originally downloadable from
+the Robinson Lab server / Citrus Cytobank repository as raw FCS files). Its
+layout needs a bit of care: unlike a typical
+`SingleCellExperiment`/`SummarizedExperiment`, HDCytoData's `_SE()` objects
+store **rows = cells, columns = markers**, with *marker* metadata
+(`channel_name`, `marker_name`, `marker_class`) in `colData()` and *per-cell*
+metadata (`sample_id`, `group_id`, `patient_id`) in `rowData()` -- the
+opposite of the usual convention.
+
+```{r import}
+se <- Bodenmiller_BCR_XL_SE()
+dim(se)
+
+## Marker metadata (one row per channel) and per-cell metadata (one row
+## per cell) -- note the "reversed" accessors for this object.
+marker_meta <- as.data.frame(colData(se))
+cell_meta <- as.data.frame(rowData(se))
+table(marker_meta$marker_class)
+table(cell_meta$group_id)
+```
+
+`CATALYST::prepData()` expects a `flowSet` (one `flowFrame` per sample). We
+build one directly from the assay matrix, splitting rows by
+`cell_meta$sample_id`:
+
+```{r build-flowset}
+raw <- assay(se, "exprs")  # cells x channels, RAW (untransformed) intensities
+## ?Bodenmiller_BCR_XL_SE confirms these are raw ion counts and should be
+## arcsinh-transformed (cofactor 5) before use -- prepData() does this below.
+
+split_idx <- split(seq_len(nrow(raw)), cell_meta$sample_id)
+ffs <- lapply(names(split_idx), function(fn) {
+    m <- raw[split_idx[[fn]], , drop = FALSE]
+    storage.mode(m) <- "double"
+    flowCore::flowFrame(m)
+})
+names(ffs) <- names(split_idx)
+fs <- methods::as(ffs, "flowSet")
+flowCore::sampleNames(fs) <- names(ffs)
+```
+
+`panel` and `md` mirror the paper's `PBMC8_panel_v3.xlsx` /
+`PBMC8_metadata.xlsx` structure, built directly from the SE's own metadata
+instead of downloading external spreadsheets:
+
+```{r panel-md}
+panel <- marker_meta
+panel$antigen <- panel$marker_name
+
+md <- unique(cell_meta[, c("sample_id", "group_id", "patient_id")])
+md$condition <- factor(ifelse(md$group_id == "Reference", "Ref", "BCRXL"),
+    levels = c("Ref", "BCRXL"))
+md$sample_id <- factor(
+    paste0(md$condition, match(md$patient_id, unique(md$patient_id))),
+    levels = paste0(rep(c("Ref", "BCRXL"), each = 8), rep(1:8, 2))
+)
+md$file_name <- names(split_idx)
+md <- md[match(names(split_idx), md$file_name), ]
+```
+
+**Gotcha found while building this (not in the paper):** `panel$fcs_colname`
+/ the flowSet's column names must be the **isotope-tagged channel names**
+(e.g. `"pNFkB(Nd142)Dd"`), not the plain antigen name (`"pNFkB"`).
+`CATALYST::prepData()` decides whether a channel is a real mass-cytometry
+channel with `as.numeric(gsub("[[:punct:][:alpha:]]", "", chs))`: it strips
+all letters and punctuation and treats a channel as "non-mass" (like `Time`)
+if nothing but digits remain. Plain antigen names that happen to contain a
+digit (`CD3`, `pS6`, ...) survive this test by accident; those that don't
+(`pNFkB`, `pAkt`, `pBtk`, `pErk`, `pLat`, `IgM`, `HLA-DR` -- 7 of the 24
+markers) get silently dropped from the assay. Using `channel_name` (which
+always contains the isotope mass number) avoids this entirely:
+
+```{r fix-channel-names}
+colnames(raw) <- panel$channel_name       # rebuild with the isotope-tagged names
+panel$fcs_colname <- panel$channel_name
+ffs <- lapply(names(split_idx), function(fn) {
+    m <- raw[split_idx[[fn]], , drop = FALSE]
+    storage.mode(m) <- "double"
+    flowCore::flowFrame(m)
+})
+names(ffs) <- names(split_idx)
+fs <- methods::as(ffs, "flowSet")
+flowCore::sampleNames(fs) <- names(ffs)
+```
+
+```{r prepdata}
+sce <- prepData(fs, panel, md, features = panel$fcs_colname)
+sce
+length(type_markers(sce))   # 10, as expected
+length(state_markers(sce))  # 14, as expected
+```
+
+**Sanity check against the paper's Figure 2:** the per-sample cell counts
+should match exactly, since this is the identical published subset.
+
+```{r fig2-check}
+n_cells(sce)
+```
+
+Reference cell counts from the paper (Figure 2): Ref1-8 = 2739, 16725, 9434,
+6906, 11962, 11038, 15974, 13670; BCRXL1-8 = 2838, 16675, 12252, 8990, 8543,
+8622, 14770, 11653. They match.
+
+## Diagnostic plots
+
+```{r plotCounts}
+plotCounts(sce, color_by = "condition")
+```
+
+```{r plotExprs, fig.width = 9, fig.height = 7}
+p <- CATALYST::plotExprs(sce, color_by = "condition")
+p$facet$params$ncol <- 6
+p
+```
+
+**MDS plot.** The paper's `CATALYST::plotMDS()` was renamed to `pbMDS()`
+(pseudobulk MDS) in current CATALYST:
+
+```{r pbMDS}
+CATALYST::pbMDS(sce, color_by = "condition")
+```
+
+**Figure 4 equivalent** -- heatmap of median (arcsinh-transformed) marker
+expression of all 24 markers per sample:
+
+```{r fig4}
+CATALYST::plotExprHeatmap(sce, bin_anno = TRUE, row_anno = TRUE)
+```
+
+**Figure 5 equivalent** -- non-redundancy scores of the 10 lineage markers:
+
+```{r fig5}
+plotNRS(sce, features = type_markers(sce), color_by = "condition")
+```
+
+## Clustering: FlowSOM + ConsensusClusterPlus
+
+```{r cluster}
+set.seed(1234)
+sce <- cluster(sce, features = type_markers(sce),
+    xdim = 10, ydim = 10, maxK = 20, seed = 1234, verbose = FALSE)
+table(cluster_ids(sce, "meta20"))
+```
+
+**Figure 6 equivalent** -- median lineage-marker intensities across the 20
+metaclusters. The paper's `plotClusterHeatmap()` was renamed to
+`plotMultiHeatmap()`; the frequency bars come via `bars = TRUE`, and a
+second (right-hand) heatmap needs `hm2` to be a character string
+(`"abundances"`, `"state"`, or a marker name -- `NULL` is no longer valid):
+
+```{r fig6, fig.height = 7}
+plotMultiHeatmap(sce, hm1 = "type", hm2 = "abundances", k = "meta20",
+    bars = TRUE, perc = TRUE)
+```
+
+**Figure 8/14-style** -- median lineage markers plus one signaling marker
+(pS6), at the metacluster level and at the full 100-SOM-code level:
+
+```{r fig8, fig.height = 7}
+plotMultiHeatmap(sce, hm1 = "type", hm2 = "pS6", k = "meta20",
+    bars = TRUE, perc = TRUE)
+```
+
+```{r fig14, fig.height = 9}
+plotMultiHeatmap(sce, hm1 = "type", hm2 = "pS6", k = "som100", m = "meta20",
+    row_anno = FALSE, bars = TRUE, perc = TRUE)
+```
+
+```{r plotClusterExprs, fig.height = 7}
+plotClusterExprs(sce, k = "meta20", features = "type")
+```
+
+**Figure 13 equivalent** -- the 100 SOM codes themselves, colored by
+metacluster:
+
+```{r fig13}
+plotCodes(sce, k = "meta20")
+```
+
+## Dimensionality reduction (UMAP)
+
+```{r rundr}
+set.seed(1234)
+sce <- runDR(sce, dr = "UMAP", cells = 1e3, features = "type")
+```
+
+**Figure 9 equivalent** -- UMAP colored by CD4 expression:
+
+```{r fig9}
+plotDR(sce, "UMAP", color_by = "CD4")
+```
+
+**Figure 10/11 equivalent** -- UMAP colored by metacluster, overall and
+stratified by sample:
+
+```{r fig10}
+plotDR(sce, "UMAP", color_by = "meta20")
+```
+
+```{r fig11, fig.width = 9, fig.height = 9}
+plotDR(sce, "UMAP", color_by = "meta20") +
+    ggplot2::facet_wrap("sample_id") +
+    ggplot2::guides(color = ggplot2::guide_legend(ncol = 2,
+        override.aes = list(size = 3)))
+```
+
+**"Percent cell class of the whole population, by condition"** -- stratified
+by condition instead of by sample, i.e. the relative composition of the two
+experimental groups on the same embedding:
+
+```{r fig12}
+plotDR(sce, "UMAP", color_by = "meta20") +
+    ggplot2::facet_wrap("condition") +
+    ggplot2::guides(color = ggplot2::guide_legend(ncol = 2,
+        override.aes = list(size = 3)))
+```
+
+## Cluster merging
+
+The paper manually annotates the 20 metaclusters into 8 known PBMC
+populations (CD4/CD8 T-cells, B-cells IgM+/-, NK cells, monocytes, DCs,
+surface-negative) using an expert-curated merging table
+(`mergeClusters()`). That step requires visual inspection of the heatmap
+above and biological knowledge of this specific panel; rather than guess
+plausible-looking labels, this vignette uses `CATALYST`'s own automatic
+`meta8` metaclustering (computed for free as part of `cluster()`'s
+`maxK = 20` sweep) directly, and encourages readers reproducing this on
+their own panel to do the manual `mergeClusters()` step described in the
+paper (Figures 15-19) instead.
+
+## Differential cell population abundance
+
+**Figure 20/21 equivalent:**
+
+```{r fig20}
+plotAbundances(sce, k = "meta8", by = "sample_id")
+```
+
+```{r fig21, fig.height = 6}
+plotAbundances(sce, k = "meta8", by = "cluster_id", shape_by = "patient_id")
+```
+
+**Figure 22 equivalent** -- `diffcyt`'s GLMM-based differential-abundance
+test, with an observation-level random effect on `sample_id` to account for
+overdispersion in the proportions (exactly as in the paper):
+
+```{r da-test}
+ei <- metadata(sce)$experiment_info
+da_formula <- createFormula(ei, cols_fixed = "condition",
+    cols_random = "sample_id")
+contrast <- createContrast(c(0, 1))
+da_res <- diffcyt(sce, formula = da_formula, contrast = contrast,
+    analysis_type = "DA", method_DA = "diffcyt-DA-GLMM",
+    clustering_to_use = "meta8", verbose = FALSE)
+table(rowData(da_res$res)$p_adj < 0.05)
+diffcyt::topTable(da_res, show_props = TRUE, format_vals = TRUE, digits = 2)
+```
+
+```{r fig22, fig.height = 5}
+## plotDiffHeatmap()'s arguments changed too: 'th' -> 'fdr', 'hm1' removed,
+## and 'y' must be the extracted rowData(), not the full diffcyt() result.
+plotDiffHeatmap(sce, rowData(da_res$res), fdr = 0.05, normalize = TRUE)
+```
+
+## Differential marker expression (signaling markers)
+
+**Figure 23/25 equivalent** -- median signaling-marker expression per
+cluster and per sample:
+
+```{r fig25, fig.height = 4}
+plotPbExprs(sce[state_markers(sce), ], k = "meta8", facet_by = "antigen",
+    shape_by = "patient_id")
+```
+
+**Figure 24 equivalent** -- `diffcyt`'s LMM-based differential-state test.
+**Important:** unlike the DA test above, the DS test must *not* use
+`sample_id` as a random effect (each cluster-sample combination already
+contributes exactly one median value, so a `sample_id` random intercept is
+perfectly confounded with the residual and the model fit silently returns
+`NA` p-values for every row -- found empirically while writing this
+vignette). Use `patient_id` (to account for the paired design, matching the
+paper) or no random effect at all:
+
+```{r ds-test}
+ds_formula <- createFormula(ei, cols_fixed = "condition",
+    cols_random = "patient_id")
+ds_res <- diffcyt(sce, formula = ds_formula, contrast = contrast,
+    analysis_type = "DS", method_DS = "diffcyt-DS-LMM",
+    clustering_to_use = "meta8", verbose = FALSE)
+table(rowData(ds_res$res)$p_adj < 0.05)
+diffcyt::topTable(ds_res, top_n = 5, order_by = "p_adj",
+    show_meds = TRUE, format_vals = TRUE, digits = 3)
+```
+
+```{r fig24, fig.height = 8}
+plotDiffHeatmap(sce, rowData(ds_res$res), top_n = 30, all = FALSE,
+    fdr = 0.05, normalize = TRUE)
+```
+
+## From CATALYST to CySA
+
+CySA's SOM-based inputs (`SOM_codes`, `SOM_stats`, `map$colsUsed`) can be
+built directly from this exact clustering -- the same FlowSOM run used for
+every figure above, not a second, independently seeded run -- so the CySA
+app and the CATALYST reference plots describe the identical clustering.
+
+```{r cysa-inputs}
+markers <- type_markers(sce)
+cid <- as.integer(cluster_ids(sce, "som100"))
+n_nodes <- nlevels(cluster_ids(sce, "som100"))
+
+## Per-node (SOM code) marker medians, from the same clustering as above.
+expr_t <- t(assay(sce, "exprs")[markers, ])
+som_codes <- apply(expr_t, 2, function(v) {
+    tapply(v, factor(cid, levels = seq_len(n_nodes)), median)
+})
+som_codes[is.na(som_codes)] <- 0
+
+cysa_sce <- SingleCellExperiment(
+    assays = list(exprs = assay(sce, "exprs")[markers, ]),
+    colData = DataFrame(
+        sample_id = factor(sce$sample_id),
+        cluster_id = factor(cid, levels = seq_len(n_nodes))
+    ),
+    metadata = list(
+        SOM_codes = som_codes,
+        SOM_stats = data.frame(
+            id = seq_len(n_nodes),
+            n = as.numeric(table(factor(cid, levels = seq_len(n_nodes)))),
+            mean = 0, median = 0, rdQu = 0, max = 0
+        ),
+        map = list(colsUsed = markers),
+        experiment_info = as.data.frame(metadata(sce)$experiment_info)
+    )
+)
+rownames(cysa_sce) <- markers
+colnames(cysa_sce) <- paste0("cell", seq_len(ncol(cysa_sce)))
+
+## A dList is required explicitly since there are only 10 (< 12) markers.
+.pairD <- function(markers) {
+    n <- length(markers)
+    pairs <- list()
+    k <- 1
+    for (i in seq_len(n - 1)) {
+        for (j in seq(i + 1, n)) {
+            pairs[[paste0("d", k)]] <- c(markers[i], markers[j])
+            k <- k + 1
+        }
+    }
+    pairs[seq_len(min(6, length(pairs)))]
+}
+
+prepped <- prepClusterSelectorData(cysa_sce, total_cells_to_sample = 5000,
+    dList = .pairD(markers), seed = 1234)
+dend <- stats::as.dendrogram(
+    stats::hclust(stats::dist(som_codes), method = "ward.D2")
+)
+dendTable <- data.frame(id = seq_len(n_nodes), label = as.character(seq_len(n_nodes)))
+clusterPatientTable <- table(
+    sample_id = colData(cysa_sce)$sample_id,
+    cluster_id = colData(cysa_sce)$cluster_id
+)
+somRasterData <- data.frame(
+    x = rep(seq_len(10), 10), y = rep(seq_len(10), each = 10),
+    id = seq_len(100)
+)
+for (m in markers) somRasterData[[m]] <- som_codes[, m]
+
+app <- clusterSelector(
+    sce = prepped$sce, sce_subsampled = prepped$sce_subsampled,
+    dList = prepped$dList, dend = dend, dendTable = dendTable,
+    clusterPatientTable = clusterPatientTable,
+    somRasterData = somRasterData, somRasterObj = NULL
+)
+if (interactive()) shiny::runApp(app)
+```
+
+CySA's marker ridge, SOM raster heatmap and stats panels are then the
+interactive counterparts of the static `plotMultiHeatmap()`/`plotAbundances()`
+figures above, computed on the identical 100-node clustering.
+
+## Technical comparison: with vs. without cyCombine
+
+This particular dataset (Bodenmiller BCR-XL) has **no real technical batch**
+-- all 16 samples were acquired in the same CyTOF run; `patient_id` is a
+biological pairing variable, not a technical batch, and "correcting" across
+patients would remove real biological signal, not a technical artifact. The
+comparison below therefore only demonstrates the mechanics of
+`cyCombine::batch_correct()` (treating patient as a stand-in batch purely
+for illustration); it is **not** a recommendation to batch-correct this kind
+of paired design.
+
+```{r cycombine, eval = FALSE}
+library(cyCombine)
+sce_bc <- sce
+colData(sce_bc)$batch <- colData(sce_bc)$patient_id
+sce_bc <- batch_correct(sce_bc, markers = type_markers(sce_bc),
+    covar = "condition", xdim = 8, ydim = 8, seed = 473)
+```
+
+Running this: `batch_correct()` completes and adds a `"cyCombine"` assay,
+but reports *"Adjusting for 0 covariate(s)"* even with `covar = "condition"`
+supplied -- i.e. in this cyCombine version the biological condition does not
+appear to be protected from the correction as intended. Given that this
+dataset has no real batch to correct in the first place, we do not pursue
+this further here; anyone using `cyCombine` on a dataset with genuine
+technical batches should verify with a positive control that `covar`/
+`anchor` are actually preserving the biological signal of interest before
+trusting the corrected output.
+
+## Note on flowVS
+
+An alternative to the fixed cofactor-5 arcsinh transform is `flowVS`, which
+estimates a per-channel cofactor by optimizing a bimodality (Bartlett)
+statistic. Trying this on the same 24 CyTOF channels:
+
+```{r flowvs, eval = FALSE}
+library(flowVS)
+res <- estParamFlowVS(fs, channels = panel$channel_name[
+    panel$marker_class %in% c("type", "state")
+])
+```
+
+For roughly a third of the signaling ("state") channels, the per-channel
+search returns `Bartlett's stat = MAX (10^9)` across almost the entire
+candidate cofactor range (0.4 to > 20000) -- i.e. the optimizer cannot find
+any interior optimum -- and the whole call eventually errors out with
+*"missing value where TRUE/FALSE needed"* before finishing all channels.
+This matches the sparse, largely unimodal (single peak near zero) marker
+distributions typical of CyTOF signaling channels, which don't have the
+clearly bimodal negative/positive population structure flowVS's optimizer
+was designed around for conventional fluorescence flow cytometry. This is
+consistent with the standard CyTOF practice (and this workflow's own
+default) of using a single fixed cofactor of 5 for all channels rather than
+per-channel optimization.
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```

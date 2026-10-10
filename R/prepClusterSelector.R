@@ -14,19 +14,23 @@
 #'
 #' @keywords internal
 .defaultDList <- function(sce) {
-  colsUsed <- S4Vectors::metadata(sce)$map$colsUsed
-  rn <- if (!is.null(colsUsed) && length(colsUsed) >= 12) colsUsed else rownames(sce)
-  if (length(rn) < 12) {
-    stop("sce must have at least 12 row names to build default dList")
-  }
-  list(
-    d1 = c(rn[1], rn[2]),
-    d2 = c(rn[3], rn[4]),
-    d3 = c(rn[5], rn[6]),
-    d4 = c(rn[7], rn[8]),
-    d5 = c(rn[9], rn[10]),
-    d6 = c(rn[11], rn[12])
-  )
+    colsUsed <- S4Vectors::metadata(sce)$map$colsUsed
+    rn <- if (!is.null(colsUsed) && length(colsUsed) >= 12) {
+        colsUsed
+    } else {
+        rownames(sce)
+    }
+    if (length(rn) < 12) {
+        stop("sce must have at least 12 row names to build default dList")
+    }
+    list(
+        d1 = c(rn[1], rn[2]),
+        d2 = c(rn[3], rn[4]),
+        d3 = c(rn[5], rn[6]),
+        d4 = c(rn[7], rn[8]),
+        d5 = c(rn[9], rn[10]),
+        d6 = c(rn[11], rn[12])
+    )
 }
 
 
@@ -53,96 +57,93 @@
 #' prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
 #' names(prepped)
 #'
-#' @examples
-#' sce <- CySA_example_sce()
-#' # prepClusterSelector(sce, ...)
-#'
 #' @export
-prepClusterSelectorData <- function(sce,
-                                    somFile = NULL,
-                                    dList = NULL,
-                                    total_cells_to_sample = 100000,
-                                    somCodesName = "SOM_codes",
-                                    assay = "exprs",
-                                    seed = 123) {
-  if (length(total_cells_to_sample) != 1 || !is.numeric(total_cells_to_sample) || total_cells_to_sample < 1) {
-    stop("'total_cells_to_sample' must be a positive scalar")
-  }
-
-  if (is.null(dList)) {
-    dList <- .defaultDList(sce)
-  }
-
-  # Cache file handling
-  cache_file <- NULL
-  if (!is.null(somFile)) {
-    cache_file <- paste0(tools::file_path_sans_ext(somFile), ".subsampled.RData")
-  }
-
-  if (!is.null(cache_file) && file.exists(cache_file)) {
-    env <- new.env()
-    load(cache_file, envir = env)
-    sce_subsampled <- env$sce_subsampled
-  } else {
-    sce_subsampled <- withr::with_seed(seed, {
-      cd <- as.data.frame(SingleCellExperiment::colData(sce))
-      proportions_df <- dplyr::group_by(cd, .data$sample_id, .data$cluster_id)
-      proportions_df <- dplyr::summarise(proportions_df, group_size = dplyr::n(), .groups = "drop")
-      proportions_df <- dplyr::ungroup(proportions_df)
-      proportions_df <- dplyr::mutate(
-        proportions_df,
-        total_size = sum(.data$group_size),
-        proportion = .data$group_size / .data$total_size,
-        n_to_sample = ceiling(.data$proportion * total_cells_to_sample + 10)
-      )
-
-      sampling_indices <- purrr::map2(
-        proportions_df$n_to_sample,
-        proportions_df$group_size,
-        ~ {
-          if (.x > .y) {
-            return(seq_len(.y))
-          }
-          sample(.y, .x)
+prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
+    total_cells_to_sample = 100000, somCodesName = "SOM_codes",
+    assay = "exprs", seed = 123) {
+    if (length(total_cells_to_sample) != 1 ||
+        !is.numeric(total_cells_to_sample) || total_cells_to_sample < 1) {
+        stop("'total_cells_to_sample' must be a positive scalar")
+    }
+    if (is.null(dList)) {
+        dList <- .defaultDList(sce)
+    }
+    cacheFile <- if (!is.null(somFile)) {
+        paste0(tools::file_path_sans_ext(somFile), ".subsampled.RData")
+    }
+    if (!is.null(cacheFile) && file.exists(cacheFile)) {
+        env <- new.env()
+        load(cacheFile, envir = env)
+        sce_subsampled <- env$sce_subsampled
+    } else {
+        sce_subsampled <- withr::with_seed(seed, .subsampleSce(
+            sce, total_cells_to_sample, somCodesName
+        ))
+        if (!is.null(cacheFile)) {
+            save(sce_subsampled, file = cacheFile)
         }
-      )
-      sampling_indices <- purrr::set_names(
-        sampling_indices,
-        paste(proportions_df$sample_id, proportions_df$cluster_id, sep = "_")
-      )
-      sampling_indices <- purrr::imap(sampling_indices, ~ {
-        sid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\1")
-        cid <- stringr::str_replace(.y, "(^.*)_(.*)", "\\2")
-        sce[
-          ,
-          SingleCellExperiment::colData(sce)$sample_id == sid &
-            SingleCellExperiment::colData(sce)$cluster_id == cid
-        ][, .x]
-      })
+    }
+    sce_subsampled <- .restoreSubsampledAssay(sce_subsampled, sce, assay)
+    list(sce = sce, sce_subsampled = sce_subsampled, dList = dList)
+}
 
-      sce_subsampled <- do.call(SummarizedExperiment::cbind, sampling_indices)
-
-      # Ensure downstream helpers see a factor cluster_id with all node levels.
-      sce_subsampled$cluster_id <- factor(
-        as.character(SingleCellExperiment::colData(sce_subsampled)$cluster_id),
-        levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
-      )
-
-      if (!is.null(cache_file)) {
-        save(sce_subsampled, file = cache_file)
-      }
-
-      sce_subsampled
+#' Stratified Subsample of the Cells
+#'
+#' Draws from every (sample, cluster) group proportionally to its size, plus
+#' ten cells, so that small groups stay represented.
+#'
+#' @param sce A \code{SingleCellExperiment}.
+#' @param total Approximate total number of cells to draw.
+#' @param somCodesName Name of the SOM codes metadata slot.
+#'
+#' @return The subsampled \code{SingleCellExperiment}; \code{cluster_id} is
+#'   a factor with one level per SOM node.
+#'
+#' @keywords internal
+.subsampleSce <- function(sce, total, somCodesName) {
+    cd <- as.data.frame(SingleCellExperiment::colData(sce))
+    groups <- dplyr::summarise(
+        dplyr::group_by(cd, .data$sample_id, .data$cluster_id),
+        group_size = dplyr::n(), .groups = "drop"
+    )
+    nToSample <- ceiling(groups$group_size / sum(groups$group_size) * total +
+        10)
+    parts <- lapply(seq_len(nrow(groups)), function(g) {
+        size <- groups$group_size[g]
+        idx <- if (nToSample[g] > size) seq_len(size) else sample(size,
+            nToSample[g])
+        inGroup <- cd$sample_id == as.character(groups$sample_id[g]) &
+            cd$cluster_id == as.character(groups$cluster_id[g])
+        sce[, inGroup][, idx]
     })
-  }
+    sub <- do.call(SummarizedExperiment::cbind, parts)
+    # Downstream helpers need a factor cluster_id with all node levels.
+    sub$cluster_id <- factor(
+        as.character(SingleCellExperiment::colData(sub)$cluster_id),
+        levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
+    )
+    sub
+}
 
-  if (length(SummarizedExperiment::assays(sce_subsampled)) == 0) {
-    SummarizedExperiment::assays(sce_subsampled)[[1]] <-
-      SummarizedExperiment::assays(sce)[[1]][, SummarizedExperiment::colData(sce_subsampled)$id]
-    names(SummarizedExperiment::assays(sce_subsampled)) <- assay
-  }
-
-  list(sce = sce, sce_subsampled = sce_subsampled, dList = dList)
+#' Restore the Assay of a Subsampled SCE Saved Without Assays
+#'
+#' @param sub Subsampled \code{SingleCellExperiment} (with \code{id} in
+#'   \code{colData} indexing the full object).
+#' @param sce The full \code{SingleCellExperiment}.
+#' @param assay Name for the restored assay.
+#'
+#' @return \code{sub}, with the first assay of \code{sce} restored when it
+#'   had none.
+#'
+#' @keywords internal
+.restoreSubsampledAssay <- function(sub, sce, assay) {
+    if (!is.null(sub) && length(SummarizedExperiment::assays(sub)) == 0) {
+        SummarizedExperiment::assays(sub)[[1]] <-
+            SummarizedExperiment::assays(sce)[[1]][,
+                SummarizedExperiment::colData(sub)$id]
+        names(SummarizedExperiment::assays(sub)) <- assay
+    }
+    sub
 }
 
 
@@ -153,7 +154,8 @@ prepClusterSelectorData <- function(sce,
 #' unchanged; missing markers are calculated from the cell-level assay.
 #'
 #' @param sce A \code{SingleCellExperiment} with \code{cluster_id} in
-#'   \code{colData} and SOM codes stored in \code{metadata(sce)[[somCodesName]]}.
+#'   \code{colData} and SOM codes stored in
+#'   \code{metadata(sce)[[somCodesName]]}.
 #' @param somCodesName Name of the SOM codes metadata slot.
 #' @param markerList Optional character vector of markers to include. If
 #'   \code{NULL}, all markers except \code{"label"} and \code{"TIME"} are used.
@@ -163,44 +165,47 @@ prepClusterSelectorData <- function(sce,
 #'
 #' @keywords internal
 .buildSOMCodes <- function(sce,
-                           somCodesName = "SOM_codes",
-                           markerList = NULL,
-                           assay = "exprs") {
-  somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
+    somCodesName = "SOM_codes",
+    markerList = NULL,
+    assay = "exprs") {
+    somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
 
-  if (is.null(markerList)) {
-    markerList <- setdiff(rownames(sce), c("label", "TIME"))
-  }
+    if (is.null(markerList)) {
+        markerList <- setdiff(rownames(sce), c("label", "TIME"))
+    }
 
-  # Only recompute markers that are not already present in SOM codes.
-  markers_to_compute <- setdiff(markerList, colnames(somCodes))
-  if (length(markers_to_compute) == 0) {
-    return(sce)
-  }
+    # Only recompute markers that are not already present in SOM codes.
+    markers_to_compute <- setdiff(markerList, colnames(somCodes))
+    if (length(markers_to_compute) == 0) {
+        return(sce)
+    }
 
-  exprs <- SummarizedExperiment::assay(sce, assay)[markers_to_compute, , drop = FALSE]
-  cluster_id <- as.integer(SingleCellExperiment::colData(sce)$cluster_id)
-  n_clusters <- nrow(somCodes)
+    exprs <- SummarizedExperiment::assay(sce, assay)[markers_to_compute, ,
+        drop = FALSE]
+    cluster_id <- as.integer(SingleCellExperiment::colData(sce)$cluster_id)
+    n_clusters <- nrow(somCodes)
 
-  # Sum expression per cluster, then divide by cluster counts.
-  cluster_sums <- rowsum(t(exprs), cluster_id, na.rm = TRUE)
-  cluster_counts <- tabulate(cluster_id, nbins = n_clusters)
-  cluster_counts[cluster_counts == 0] <- 1 # avoid division by zero; will be 0 anyway
-  cluster_means <- cluster_sums / cluster_counts
+    # Sum expression per cluster, then divide by cluster counts.
+    cluster_sums <- rowsum(t(exprs), cluster_id, na.rm = TRUE)
+    cluster_counts <- tabulate(cluster_id, nbins = n_clusters)
+    # Avoid division by zero; the sums are 0 anyway.
+    cluster_counts[cluster_counts == 0] <- 1
+    cluster_means <- cluster_sums / cluster_counts
 
-  # rowsum may drop empty clusters; ensure full n_clusters rows.
-  if (nrow(cluster_means) < n_clusters) {
-    full <- matrix(0, nrow = n_clusters, ncol = length(markers_to_compute))
-    colnames(full) <- markers_to_compute
-    present <- as.integer(rownames(cluster_means))
-    full[present, ] <- as.matrix(cluster_means)
-    cluster_means <- full
-  }
+    # rowsum may drop empty clusters; ensure full n_clusters rows.
+    if (nrow(cluster_means) < n_clusters) {
+        full <- matrix(0, nrow = n_clusters, ncol = length(markers_to_compute))
+        colnames(full) <- markers_to_compute
+        present <- as.integer(rownames(cluster_means))
+        full[present, ] <- as.matrix(cluster_means)
+        cluster_means <- full
+    }
 
-  new_codes <- cbind(somCodes, cluster_means)
-  # Reorder to requested marker order, keeping existing columns first if needed.
-  S4Vectors::metadata(sce)[[somCodesName]] <- new_codes[, markerList, drop = FALSE]
-  sce
+    new_codes <- cbind(somCodes, cluster_means)
+    # Reorder to the requested marker order.
+    S4Vectors::metadata(sce)[[somCodesName]] <-
+        new_codes[, markerList, drop = FALSE]
+    sce
 }
 
 
@@ -218,30 +223,31 @@ prepClusterSelectorData <- function(sce,
 #'
 #' @keywords internal
 .buildSOMStats <- function(sce,
-                           somCodesName = "SOM_codes",
-                           assay = "exprs") {
-  somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
-  colData <- SingleCellExperiment::colData(sce)
-  exprs <- SummarizedExperiment::assay(sce, assay)
-  stats <- data.frame(row.names = seq_len(nrow(somCodes)))
+    somCodesName = "SOM_codes",
+    assay = "exprs") {
+    somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
+    colData <- SingleCellExperiment::colData(sce)
+    exprs <- SummarizedExperiment::assay(sce, assay)
+    stats <- data.frame(row.names = seq_len(nrow(somCodes)))
 
-  for (lv in seq_len(nrow(somCodes))) {
-    cells <- exprs[colnames(somCodes), colData$cluster_id == lv, drop = FALSE]
-    if (ncol(cells) == 0) {
-      stats[lv, c("median", "mean", "rdQu", "max", "n", "id")] <-
-        c(NA, NA, NA, NA, 0, lv)
-      next
+    for (lv in seq_len(nrow(somCodes))) {
+        cells <- exprs[colnames(somCodes), colData$cluster_id == lv,
+            drop = FALSE]
+        if (ncol(cells) == 0) {
+            stats[lv, c("median", "mean", "rdQu", "max", "n", "id")] <-
+                c(NA, NA, NA, NA, 0, lv)
+            next
+        }
+        d <- sqrt(colSums((t(cells) - somCodes[lv, , drop = TRUE])^2))
+        s1 <- summary(d)
+        stats[lv, "median"] <- s1[["Median"]]
+        stats[lv, "mean"] <- s1[["Mean"]]
+        stats[lv, "rdQu"] <- s1[["3rd Qu."]]
+        stats[lv, "max"] <- s1[["Max."]]
+        stats[lv, "n"] <- ncol(cells)
+        stats[lv, "id"] <- lv
     }
-    d <- sqrt(colSums((t(cells) - somCodes[lv, , drop = TRUE])^2))
-    s1 <- summary(d)
-    stats[lv, "median"] <- s1[["Median"]]
-    stats[lv, "mean"] <- s1[["Mean"]]
-    stats[lv, "rdQu"] <- s1[["3rd Qu."]]
-    stats[lv, "max"] <- s1[["Max."]]
-    stats[lv, "n"] <- ncol(cells)
-    stats[lv, "id"] <- lv
-  }
-  stats
+    stats
 }
 
 
@@ -260,57 +266,55 @@ prepClusterSelectorData <- function(sce,
 #'   \code{variable}, and \code{value}.
 #'
 #' @keywords internal
-.buildSOMClusterStats <- function(sce,
-                                  somCodesName = "SOM_codes",
-                                  assay = "exprs",
-                                  verbose = TRUE) {
-  somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
-  markers <- colnames(somCodes)
-  exprs <- SummarizedExperiment::assay(sce, assay)[markers, , drop = FALSE]
-  cluster_id <- as.integer(SingleCellExperiment::colData(sce)$cluster_id)
-  n_clusters <- nrow(somCodes)
+.buildSOMClusterStats <- function(sce, somCodesName = "SOM_codes",
+    assay = "exprs", verbose = TRUE) {
+    somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
+    markers <- colnames(somCodes)
+    exprs <- SummarizedExperiment::assay(sce, assay)[markers, , drop = FALSE]
+    clusterId <- as.integer(SingleCellExperiment::colData(sce)$cluster_id)
+    # Precompute cluster membership as a list of cell indices once.
+    idxByCluster <- split(seq_along(clusterId), clusterId)
+    result <- lapply(seq_len(nrow(somCodes)), function(lv) {
+        if (verbose && lv %% 100 == 0) {
+            message("cluster ", lv, " ", format(Sys.time(), "%a %b %d %X %Y"))
+        }
+        idx <- idxByCluster[[as.character(lv)]]
+        cells <- if (length(idx) > 0L) {
+            exprs[, idx, drop = FALSE] - somCodes[lv, , drop = TRUE]
+        }
+        .clusterMarkerSummary(cells, lv, markers)
+    })
+    do.call(rbind, result)
+}
 
-  stats_names <- c("Min.", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max.")
-  n_stats <- length(stats_names)
-  n_markers <- length(markers)
-
-  # Precompute cluster membership as a list of cell indices once.
-  cell_idx <- seq_along(cluster_id)
-  idx_by_cluster <- split(cell_idx, cluster_id)
-
-  result <- lapply(seq_len(n_clusters), function(lv) {
-    if (verbose && lv %% 100 == 0) {
-      message("cluster ", lv, " ", format(Sys.time(), "%a %b %d %X %Y"))
+#' Six-Number Summary per Marker of One Cluster
+#'
+#' @param cells Marker x cell matrix of the cluster's cells minus the node
+#'   code, or \code{NULL} for an empty cluster.
+#' @param lv Cluster (node) id.
+#' @param markers Marker names (rows of \code{cells}).
+#'
+#' @return A long data frame with \code{cluster}, \code{stat},
+#'   \code{variable} and \code{value} (zeros for an empty cluster).
+#'
+#' @keywords internal
+.clusterMarkerSummary <- function(cells, lv, markers) {
+    statsNames <- c("Min.", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max.")
+    value <- 0
+    if (!is.null(cells)) {
+        # matrixStats is much faster than apply() + summary().
+        qs <- matrixStats::rowQuantiles(cells,
+            probs = c(0, 0.25, 0.5, 0.75, 1), type = 7, drop = FALSE)
+        value <- c(qs[, 1], qs[, 2], qs[, 3], matrixStats::rowMeans2(cells),
+            qs[, 4], qs[, 5])
+        value[is.na(value)] <- 0
     }
-    idx <- idx_by_cluster[[as.character(lv)]]
-    if (is.null(idx) || length(idx) == 0) {
-      df <- data.frame(
-        cluster = rep(lv, n_markers * n_stats),
-        stat = rep(stats_names, each = n_markers),
-        variable = rep(markers, n_stats),
-        value = 0
-      )
-      return(df)
-    }
-    cells <- exprs[, idx, drop = FALSE] - somCodes[lv, , drop = TRUE]
-    # Compute summaries per marker (row). matrixStats is much faster than apply+summary.
-    qs <- matrixStats::rowQuantiles(
-      cells,
-      probs = c(0, 0.25, 0.5, 0.75, 1),
-      type = 7,
-      drop = FALSE
+    data.frame(
+        cluster = rep(lv, length(markers) * length(statsNames)),
+        stat = rep(statsNames, each = length(markers)),
+        variable = rep(markers, length(statsNames)),
+        value = value
     )
-    means <- matrixStats::rowMeans2(cells)
-    df <- data.frame(
-      cluster = rep(lv, n_markers * n_stats),
-      stat = rep(stats_names, each = n_markers),
-      variable = rep(markers, n_stats),
-      value = c(qs[, 1], qs[, 2], qs[, 3], means, qs[, 4], qs[, 5])
-    )
-    df$value[is.na(df$value)] <- 0
-    df
-  })
-  do.call(rbind, result)
 }
 
 
@@ -326,27 +330,28 @@ prepClusterSelectorData <- function(sce,
 #'
 #' @keywords internal
 .buildSOMRasterData <- function(sce, somCodesName = "SOM_codes") {
-  somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
-  nDim <- sqrt(nrow(somCodes))
-  if (nDim != as.integer(nDim)) {
-    stop("SOM grid is not square: nrow(somCodes) is not a perfect square")
-  }
-  nDim <- as.integer(nDim)
-  somRasterData <- data.frame(
-    x = rep(seq_len(nDim), nDim),
-    y = rep(seq_len(nDim), each = nDim)
-  )
-  somRasterData <- cbind(somRasterData, somCodes)
+    somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
+    nDim <- sqrt(nrow(somCodes))
+    if (nDim != as.integer(nDim)) {
+        stop("SOM grid is not square: nrow(somCodes) is not a perfect square")
+    }
+    nDim <- as.integer(nDim)
+    somRasterData <- data.frame(
+        x = rep(seq_len(nDim), nDim),
+        y = rep(seq_len(nDim), each = nDim)
+    )
+    somRasterData <- cbind(somRasterData, somCodes)
 
-  somStats <- S4Vectors::metadata(sce)$SOM_stats
-  if (!is.null(somStats) && is.data.frame(somStats) && "n" %in% colnames(somStats)) {
-    n_values <- somStats$n
-  } else {
-    n_values <- rep(NA_integer_, nrow(somCodes))
-  }
-  somRasterData$N <- n_values
-  colnames(somRasterData) <- make.names(colnames(somRasterData))
-  somRasterData
+    somStats <- S4Vectors::metadata(sce)$SOM_stats
+    if (!is.null(somStats) && is.data.frame(somStats) &&
+        "n" %in% colnames(somStats)) {
+        n_values <- somStats$n
+    } else {
+        n_values <- rep(NA_integer_, nrow(somCodes))
+    }
+    somRasterData$N <- n_values
+    colnames(somRasterData) <- make.names(colnames(somRasterData))
+    somRasterData
 }
 
 
@@ -362,42 +367,46 @@ prepClusterSelectorData <- function(sce,
 #' @return A list with \code{dend}, \code{dendTable}, and \code{colTree}.
 #'
 #' @keywords internal
-.buildDendTable <- function(sce, somCodesName = "SOM_codes", useColTree = FALSE) {
-  hc <- stats::hclust(stats::dist(S4Vectors::metadata(sce)[[somCodesName]]))
-  dend <- stats::as.dendrogram(hc)
-  dendTable <- data.frame(
-    parent = NA,
-    child = "rt",
-    nleaf = .nDendrogramLeaves(dend),
-    indexString = ""
-  )
+.buildDendTable <- function(sce, somCodesName = "SOM_codes",
+    useColTree = FALSE) {
+    hc <- stats::hclust(stats::dist(S4Vectors::metadata(sce)[[somCodesName]]))
+    dend <- stats::as.dendrogram(hc)
+    dendTable <- data.frame(
+        parent = NA,
+        child = "rt",
+        nleaf = .nDendrogramLeaves(dend),
+        indexString = ""
+    )
 
-  colTree <- NULL
-  if (useColTree) {
-    recDendTable <- function(dend, parent = "rt", myindexString = "") {
-      if (.isDendrogramLeaf(dend)) {
-        return()
-      }
-      for (di in seq_along(dend)) {
-        indexString <- paste0(myindexString, "[[", di, "]]")
-        nleaf <- .nDendrogramLeaves(dend[[di]])
-        dendTable <<- rbind(
-          dendTable,
-          data.frame(
-            parent = parent,
-            child = paste0(parent, ".", di),
-            nleaf = nleaf,
-            indexString = indexString
-          )
-        )
-        recDendTable(dend[[di]], paste0(parent, ".", di), indexString)
-      }
+    colTree <- NULL
+    if (useColTree) {
+        # Depth-first walk returning the rows of every sub-tree, in the same
+        # order the rows were previously appended.
+        recDendTable <- function(dend, parent = "rt", myindexString = "") {
+            if (.isDendrogramLeaf(dend)) {
+                return(NULL)
+            }
+            rows <- lapply(seq_along(dend), function(di) {
+                indexString <- paste0(myindexString, "[[", di, "]]")
+                child <- paste0(parent, ".", di)
+                rbind(
+                    data.frame(
+                        parent = parent,
+                        child = child,
+                        nleaf = .nDendrogramLeaves(dend[[di]]),
+                        indexString = indexString
+                    ),
+                    recDendTable(dend[[di]], child, indexString)
+                )
+            })
+            do.call(rbind, rows)
+        }
+        dendTable <- rbind(dendTable, recDendTable(dend))
+        colTree <- collapsibleTree::collapsibleTreeNetwork(dendTable,
+            attribute = "nleaf", inputId = "node")
     }
-    recDendTable(dend)
-    colTree <- collapsibleTree::collapsibleTreeNetwork(dendTable, attribute = "nleaf", inputId = "node")
-  }
 
-  list(dend = dend, dendTable = dendTable, colTree = colTree)
+    list(dend = dend, dendTable = dendTable, colTree = colTree)
 }
 
 #' Test if an Object is a Dendrogram Leaf
@@ -408,7 +417,7 @@ prepClusterSelectorData <- function(sce,
 #'
 #' @keywords internal
 .isDendrogramLeaf <- function(x) {
-  !is.null(attr(x, "leaf")) && isTRUE(attr(x, "leaf"))
+    !is.null(attr(x, "leaf")) && isTRUE(attr(x, "leaf"))
 }
 
 #' Count Leaves in a Dendrogram
@@ -419,10 +428,10 @@ prepClusterSelectorData <- function(sce,
 #'
 #' @keywords internal
 .nDendrogramLeaves <- function(x) {
-  if (.isDendrogramLeaf(x)) {
-    return(1L)
-  }
-  sum(vapply(x, .nDendrogramLeaves, integer(1)))
+    if (.isDendrogramLeaf(x)) {
+        return(1L)
+    }
+    sum(vapply(x, .nDendrogramLeaves, integer(1)))
 }
 
 
@@ -469,111 +478,126 @@ prepClusterSelectorData <- function(sce,
 #'   it is reused instead of subsampling the full SCE. This avoids the memory
 #'   cost of subsampling large datasets.
 #'
+#' @examples
+#' root <- file.path(tempdir(), "cysa-example")
+#' dir.create(file.path(root, "_data"), recursive = TRUE, showWarnings = FALSE)
+#' # A square SOM grid (here 4 x 4 nodes) is required for the raster data.
+#' sce <- CySA_example_sce(n_cells = 200, n_nodes = 16)
+#' saveRDS(sce, file.path(root, "_data", "sce.RDS"))
+#' prepClusterSelector(root, sce = sce, total_cells_to_sample = 100,
+#'     verbose = FALSE)
+#' list.files(file.path(root, "_data"))
+#'
 #' @export
-prepClusterSelector <- function(currentRoot,
-                                sce = NULL,
-                                useColTree = FALSE,
-                                somCodesName = "SOM_codes",
-                                clusterColName = "cluster_id",
-                                total_cells_to_sample = 100000,
-                                dList = NULL,
-                                assay = "exprs",
-                                verbose = TRUE,
-                                force = FALSE,
-                                outputList = NULL,
-                                seed = 123,
-                                subsampledSCEFile = NULL) {
-  somFile <- file.path(currentRoot, "_data", "sce.RDS")
-  outFile <- file.path(currentRoot, "_data", "sce.shiny.RData")
-
-  if (!file.exists(somFile)) {
-    stop("SCE file not found: ", somFile)
-  }
-
-  if (file.exists(outFile) && !force) {
-    if (verbose) message("Output exists and force = FALSE; returning currentRoot")
-    return(currentRoot)
-  }
-
-  if (is.null(sce)) {
-    if (verbose) message("Reading SCE")
-    sce <- readRDS(somFile)
-  }
-
-  if (!is.null(subsampledSCEFile) && file.exists(subsampledSCEFile)) {
-    if (verbose) message("Using provided subsampled SCE file: ", subsampledSCEFile)
-    if (is.null(dList)) {
-      dList <- .defaultDList(sce)
+prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
+    somCodesName = "SOM_codes", clusterColName = "cluster_id",
+    total_cells_to_sample = 100000, dList = NULL, assay = "exprs",
+    verbose = TRUE, force = FALSE, outputList = NULL, seed = 123,
+    subsampledSCEFile = NULL) {
+    say <- function(...) if (verbose) message(...)
+    somFile <- file.path(currentRoot, "_data", "sce.RDS")
+    outFile <- file.path(currentRoot, "_data", "sce.shiny.RData")
+    if (!file.exists(somFile)) {
+        stop("SCE file not found: ", somFile)
     }
-    sce_subsampled <- readRDS(subsampledSCEFile)
-    if (!is.null(sce_subsampled) && length(SummarizedExperiment::assays(sce_subsampled)) == 0) {
-      if (verbose) message("Restoring assay data into subsampled SCE")
-      SummarizedExperiment::assays(sce_subsampled)[[1]] <-
-        SummarizedExperiment::assays(sce)[[1]][, SummarizedExperiment::colData(sce_subsampled)$id]
-      names(SummarizedExperiment::assays(sce_subsampled)) <- assay
+    if (file.exists(outFile) && !force) {
+        say("Output exists and force = FALSE; returning currentRoot")
+        return(currentRoot)
     }
-  } else {
-    if (verbose) message("Subsampling SCE")
-    prep <- prepClusterSelectorData(
-      sce = sce,
-      somFile = somFile,
-      dList = dList,
-      total_cells_to_sample = total_cells_to_sample,
-      somCodesName = somCodesName,
-      assay = assay,
-      seed = seed
+    if (is.null(sce)) {
+        say("Reading SCE")
+        sce <- readRDS(somFile)
+    }
+    sub <- .prepSubsample(sce, subsampledSCEFile, somFile, dList,
+        total_cells_to_sample, somCodesName, assay, seed, say)
+    sce_subsampled <- sub$sce_subsampled
+    dList <- sub$dList
+    say("Building cluster patient table")
+    sce$cluster_id <- factor(
+        as.character(SingleCellExperiment::colData(sce)[[clusterColName]]),
+        levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
     )
-    sce_subsampled <- prep$sce_subsampled
-    dList <- prep$dList
-  }
+    clusterPatientTable <- table(as.data.frame(
+        SingleCellExperiment::colData(sce)[, c("sample_id", clusterColName)]
+    ))
+    sce <- .prepSomSummaries(sce, somCodesName, assay, verbose, say)
+    say("Building SOM raster data")
+    somRasterData <- .buildSOMRasterData(sce, somCodesName = somCodesName)
+    somRasterObj <- NULL
+    say("Building dendrogram table")
+    dendRes <- .buildDendTable(sce, somCodesName = somCodesName,
+        useColTree = useColTree)
+    # save() stores objects under their variable names: the bundle holds
+    # dend_obj and dend_table, which is what the loaders expect.
+    dend_obj <- dendRes$dend
+    dend_table <- dendRes$dendTable
+    say("Saving outputs")
+    save(sce, sce_subsampled, outputList, dList, dend_obj, dend_table,
+        clusterPatientTable, somRasterData, somRasterObj,
+        file = outFile, compress = FALSE)
+    say("Saved: ", outFile)
+    currentRoot
+}
 
-  if (verbose) message("Building cluster patient table")
-  n_clusters <- nrow(S4Vectors::metadata(sce)[[somCodesName]])
-  sce$cluster_id <- factor(as.character(SingleCellExperiment::colData(sce)[[clusterColName]]),
-    levels = seq_len(n_clusters)
-  )
-  clusterPatientTable <- table(as.data.frame(SingleCellExperiment::colData(sce)[, c("sample_id", clusterColName)]))
+#' Subsampled SCE for prepClusterSelector()
+#'
+#' Reuses \code{subsampledSCEFile} when it exists (restoring its assay if it
+#' was saved without one), otherwise subsamples with
+#' \code{prepClusterSelectorData()}.
+#'
+#' @inheritParams prepClusterSelector
+#' @param somFile Path of the saved full SCE (cache key of the subsample).
+#' @param say Progress message function.
+#'
+#' @return A list with \code{sce_subsampled} and \code{dList}.
+#'
+#' @keywords internal
+.prepSubsample <- function(sce, subsampledSCEFile, somFile, dList,
+    total_cells_to_sample, somCodesName, assay, seed, say) {
+    if (!is.null(subsampledSCEFile) && file.exists(subsampledSCEFile)) {
+        say("Using provided subsampled SCE file: ", subsampledSCEFile)
+        if (is.null(dList)) {
+            dList <- .defaultDList(sce)
+        }
+        sub <- readRDS(subsampledSCEFile)
+        if (!is.null(sub) &&
+            length(SummarizedExperiment::assays(sub)) == 0) {
+            say("Restoring assay data into subsampled SCE")
+        }
+        return(list(sce_subsampled = .restoreSubsampledAssay(sub, sce, assay),
+            dList = dList))
+    }
+    say("Subsampling SCE")
+    prep <- prepClusterSelectorData(
+        sce = sce, somFile = somFile, dList = dList,
+        total_cells_to_sample = total_cells_to_sample,
+        somCodesName = somCodesName, assay = assay, seed = seed
+    )
+    list(sce_subsampled = prep$sce_subsampled, dList = prep$dList)
+}
 
-  if (verbose) message("Updating SOM codes")
-  sce <- .buildSOMCodes(sce, somCodesName = somCodesName, assay = assay)
-
-  if (is.null(S4Vectors::metadata(sce)$SOM_stats)) {
-    if (verbose) message("Building SOM stats")
-    S4Vectors::metadata(sce)$SOM_stats <- .buildSOMStats(sce, somCodesName = somCodesName, assay = assay)
-  } else {
-    if (verbose) message("Reusing existing SOM_stats")
-  }
-
-  if (verbose) message("Building SOM cluster stats")
-  S4Vectors::metadata(sce)[["som_clster_stats"]] <- .buildSOMClusterStats(
-    sce,
-    somCodesName = somCodesName,
-    assay = assay,
-    verbose = verbose
-  )
-
-  if (verbose) message("Building SOM raster data")
-  somRasterData <- .buildSOMRasterData(sce, somCodesName = somCodesName)
-  somRasterObj <- NULL
-
-  if (verbose) message("Building dendrogram table")
-  dend_res <- .buildDendTable(sce, somCodesName = somCodesName, useColTree = useColTree)
-  dend_obj <- dend_res$dend
-  dend_table <- dend_res$dendTable
-
-  if (verbose) message("Saving outputs")
-  save(
-    sce, sce_subsampled,
-    outputList, dList,
-    dend = dend_obj,
-    dendTable = dend_table,
-    clusterPatientTable,
-    somRasterData,
-    somRasterObj,
-    file = outFile,
-    compress = FALSE
-  )
-
-  if (verbose) message("Saved: ", outFile)
-  currentRoot
+#' SOM Codes, Node Statistics and Cluster Statistics
+#'
+#' @inheritParams prepClusterSelector
+#' @param say Progress message function.
+#'
+#' @return \code{sce} with refreshed SOM codes, \code{SOM_stats} (built only
+#'   when missing) and \code{som_clster_stats} in its metadata.
+#'
+#' @keywords internal
+.prepSomSummaries <- function(sce, somCodesName, assay, verbose, say) {
+    say("Updating SOM codes")
+    sce <- .buildSOMCodes(sce, somCodesName = somCodesName, assay = assay)
+    if (is.null(S4Vectors::metadata(sce)$SOM_stats)) {
+        say("Building SOM stats")
+        S4Vectors::metadata(sce)$SOM_stats <- .buildSOMStats(sce,
+            somCodesName = somCodesName, assay = assay)
+    } else {
+        say("Reusing existing SOM_stats")
+    }
+    say("Building SOM cluster stats")
+    S4Vectors::metadata(sce)[["som_clster_stats"]] <- .buildSOMClusterStats(
+        sce, somCodesName = somCodesName, assay = assay, verbose = verbose
+    )
+    sce
 }

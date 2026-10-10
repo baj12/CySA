@@ -136,6 +136,19 @@ test_that("countBarPlotFunc compares to named outputList group", {
   expect_s3_class(p, "ggplot")
 })
 
+test_that("countBarPlotFunc ignores stale node ids in the comparison group", {
+  # Regression: a saved group with an id beyond the current SOM's node
+  # range crashed with "subscript out of bounds" instead of being ignored.
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 4)
+  cpt <- table(sample_id = sce$sample_id, cluster_id = sce$cluster_id)
+  p <- expect_no_error(countBarPlotFunc(
+    rs = c(1L, 2L), clusterPatientTable = cpt, cst = "Ref",
+    sce = sce, outputList = list(Ref = c(3L, 4L, 99999L)),
+    groupsInput = list()
+  ))
+  expect_s3_class(p, "ggplot")
+})
+
 test_that("countBarPlotFunc errors for unknown comparison column", {
   sce <- CySA_example_sce(n_cells = 200, n_nodes = 4)
   cpt <- table(sample_id = sce$sample_id, cluster_id = sce$cluster_id)
@@ -383,6 +396,110 @@ test_that("drawProjection colours by groups when colorbyGroups supplied", {
   expect_s3_class(p, "ggplot")
 })
 
+test_that("drawProjection colours by agreement when supplied", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 4)
+  codes <- S4Vectors::metadata(sce)$SOM_codes
+  df <- buildProjectionDf(ggplot2::ggplot(), 1L, list(list(dims = c("marker1", "marker2"))), sce)
+  xy <- as.matrix(df[, c("marker1", "marker2")])
+  agreement <- .knnAgreement(codes, xy, k = 2)
+
+  p <- drawProjection(df, rs = 1L, colorbyGroups = NULL, sce = sce,
+    agreement = agreement)
+
+  expect_s3_class(p, "ggplot")
+  # The colour legend title must name the score; labels materialise at
+  # build time.
+  b <- ggplot2::ggplot_build(p)
+  expect_identical(b$plot$labels$colour, "agreement")
+})
+
+test_that("drawProjection group colours win over agreement", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 4)
+  codes <- S4Vectors::metadata(sce)$SOM_codes
+  df <- buildProjectionDf(ggplot2::ggplot(), 1L, list(list(dims = c("marker1", "marker2"))), sce)
+  xy <- as.matrix(df[, c("marker1", "marker2")])
+  agreement <- .knnAgreement(codes, xy, k = 2)
+
+  p <- drawProjection(df, rs = 1L, colorbyGroups = c("A"),
+    sce = sce, outputList = list(A = 1:2, B = 3:4), agreement = agreement)
+
+  # Explicit group colouring must not be overridden by agreement mode:
+  # the colour legend stays the group variable, not the score.
+  expect_s3_class(p, "ggplot")
+  b <- ggplot2::ggplot_build(p)
+  expect_false(grepl("agreement", b$plot$labels$colour %||% "",
+    ignore.case = TRUE))
+})
+
+test_that("drawProjection agreement tooltip adds the score line", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 4)
+  codes <- S4Vectors::metadata(sce)$SOM_codes
+  df <- buildProjectionDf(ggplot2::ggplot(), 1L, list(list(dims = c("marker1", "marker2"))), sce)
+  xy <- as.matrix(df[, c("marker1", "marker2")])
+  agreement <- .knnAgreement(codes, xy, k = 2)
+
+  p <- drawProjection(df, rs = 1L, colorbyGroups = NULL, sce = sce,
+    agreement = agreement)
+  b <- ggplot2::ggplot_build(p)$data[[1]]
+  # The tooltip gains an "agreement:" line with the score in [0, 1]
+  # (ggplot2 consumes the raw column into the colour mapping, so the
+  # tooltip text is the observable).
+  expect_true(all(grepl("agreement:", b$text, fixed = TRUE)))
+  scores <- as.numeric(sub(".*agreement: ([0-9.]+).*", "\\1", b$text))
+  expect_true(all(scores >= 0 & scores <= 1))
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# .knnAgreement: neighbourhood agreement between a 2D view and full codes
+# ══════════════════════════════════════════════════════════════════════════════
+
+test_that(".knnAgreement scores neighbourhood overlap per node", {
+  # Four nodes: codes place 1 close to 2 and 3 close to 4 in full space.
+  codes <- rbind(c(0.0, 0.0), c(0.1, 0.0), c(5.0, 5.0), c(5.1, 5.0))
+  # The 2D view keeps the pair structure perfectly: same neighbours.
+  xy_good <- rbind(c(0.0, 0.0), c(0.1, 0.0), c(5.0, 5.0), c(5.1, 5.0))
+  scores_good <- .knnAgreement(codes, xy_good, k = 1)
+  expect_equal(unname(scores_good), c(1, 1, 1, 1))
+  # The 2D view destroys the pair structure: every node's nearest
+  # neighbour is wrong, so all scores are 0.
+  xy_bad <- rbind(c(0.0, 0.0), c(5.0, 5.0), c(5.1, 5.0), c(0.1, 0.0))
+  scores_bad <- .knnAgreement(codes, xy_bad, k = 1)
+  expect_equal(unname(scores_bad), c(0, 0, 0, 0))
+})
+
+test_that(".knnAgreement with k >= n returns agreement 1 everywhere", {
+  codes <- rbind(c(0, 0), c(0.1, 0), c(5, 5))
+  xy <- rbind(c(3, 3), c(3, 3.1), c(3, 3.2))
+  scores <- .knnAgreement(codes, xy, k = 3)
+  expect_equal(unname(scores), c(1, 1, 1))
+})
+
+test_that(".knnAgreement handles ties deterministically", {
+  # Three nodes mutually equidistant: with k = 1, each node's kNN set in
+  # both spaces must contain the same single neighbour regardless of how
+  # ties break, so agreement is 1 everywhere.
+  codes <- rbind(c(0, 0), c(1, 0), c(0.5, sqrt(3) / 2))
+  xy <- rbind(c(10, 10), c(11, 10), c(10.5, 10 + sqrt(3) / 2))
+  scores <- .knnAgreement(codes, xy, k = 1)
+  expect_equal(unname(scores), c(1, 1, 1))
+})
+
+test_that(".knnAgreement drops NA coordinates instead of failing", {
+  codes <- rbind(c(0.0, 0.0), c(0.1, 0.0), c(5.0, 5.0), c(5.1, 5.0))
+  xy <- rbind(c(0.0, 0.0), c(0.1, 0.0), c(5.0, 5.0), c(5.1, 5.0))
+  xy[2, 1] <- NA
+  scores <- .knnAgreement(codes, xy, k = 1)
+  expect_true(is.na(scores[2]))
+  expect_equal(unname(scores[c(1, 3, 4)]), c(1, 1, 1))
+})
+
+test_that(".knnAgreement is 1 for a single node", {
+  # No neighbours exist in either space: the degenerate score is 1
+  # (nothing to distort) rather than NaN.
+  scores <- .knnAgreement(rbind(c(0, 0)), rbind(c(1, 1)), k = 5)
+  expect_equal(unname(scores), 1)
+})
+
 # ══════════════════════════════════════════════════════════════════════════════
 # violin plots
 # ══════════════════════════════════════════════════════════════════════════════
@@ -418,6 +535,19 @@ test_that("plotViolinFunc returns empty plot when no groups have >=2 nodes", {
     sce = sce, upsetSelection = "A", outputList = outputList,
     violinSelection = colnames(S4Vectors::metadata(sce)$SOM_codes)[1:2]
   )
+  expect_s3_class(p, "ggplot")
+})
+
+test_that("plotViolinFunc ignores a stale node id in a saved group", {
+  # Regression: somCodes[rows, ...] with a row id beyond nrow(somCodes)
+  # threw "subscript out of bounds" instead of dropping the stale id.
+  sce <- CySA_example_sce(n_cells = 300, n_nodes = 4, n_markers = 6)
+  outputList <- list(A = c(1L, 2L), B = c(3L, 4L, 99999L))
+  p <- expect_no_error(plotViolinFunc(
+    sce = sce, upsetSelection = names(outputList),
+    outputList = outputList,
+    violinSelection = colnames(S4Vectors::metadata(sce)$SOM_codes)[1:3]
+  ))
   expect_s3_class(p, "ggplot")
 })
 
