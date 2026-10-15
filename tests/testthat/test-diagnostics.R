@@ -194,10 +194,23 @@ test_that("Diagnostics and ordered-heatmap panels respect a group selection", {
 
     groupAAmbiguity <- diagAmbiguityPlot()
     expect_s3_class(groupAAmbiguity, "ggplot")
-    # groupA has 5 nodes out of 10; its ambiguity codebook/cells must be
-    # restricted to those 5, not computed against the whole SOM.
+    # groupA has 5 nodes out of 10: only cells from those 5 are
+    # evaluated, but rivals are still drawn from the full SOM codebook
+    # (see .buildDiagnosticsReactives()), not just the selected groups.
     expect_length(levels(groupAAmbiguity$data$cluster_id), 5L)
     expect_lt(nrow(groupAAmbiguity$data), nrow(allAmbiguity))
+
+    fullCodes <- S4Vectors::metadata(test_app$sce)$SOM_codes
+    groupANodes <- as.character(1:5)
+    sceGroupA <- test_app$sce[,
+      as.character(test_app$sce$cluster_id) %in% groupANodes]
+    expected <- computeClusterAmbiguity(sceGroupA, fullCodes,
+      colnames(fullCodes))
+    expect_equal(
+      groupAAmbiguity$data$pctAmbiguous[
+        order(groupAAmbiguity$data$cluster_id)],
+      expected$pctAmbiguous[order(expected$cluster_id)]
+    )
 
     allMarkers <- colnames(S4Vectors::metadata(test_app$sce)$SOM_codes)
     session$setInputs(orderedHeatmapGroups = "groupA",

@@ -24,18 +24,6 @@
     diagSce <- shiny::reactive({
         .subsetSceByGroups(st$sce, st$rv$outputList, input$diagGroups)
     })
-    # Node ids of the selected groups, or NULL for "every group selected" --
-    # mirrors .subsetSceByGroups()'s own all-selected/empty shortcut, so the
-    # ambiguity codebook is restricted the same way the cells already are.
-    diagNodeIds <- shiny::reactive({
-        groups <- input$diagGroups
-        if (is.null(groups) || length(groups) == 0L ||
-            setequal(groups, names(st$rv$outputList))) {
-            return(NULL)
-        }
-        unique(unlist(lapply(st$rv$outputList[groups], as.character),
-            use.names = FALSE))
-    })
     st$diagMdsPlot <- shiny::reactive({
         plotSampleMDS(diagSce(), st$colsUsed, color_by = colorBy())
     })
@@ -45,14 +33,14 @@
     st$diagNrsPlot <- shiny::reactive({
         plotNRS(diagSce(), st$colsUsed, color_by = colorBy())
     })
+    # Rivals are drawn from the FULL SOM codebook, not just the selected
+    # groups: a selected cluster's cells can be ambiguous against a node
+    # that was never selected, and that is exactly the kind of leakage
+    # this diagnostic exists to catch. Only the cells (which clusters are
+    # evaluated) are restricted to the current selection.
     st$diagAmbiguityPlot <- shiny::reactive({
-        codes <- st$metaD[[st$somCodesName]]
-        nodeIds <- diagNodeIds()
-        if (!is.null(nodeIds)) {
-            codes <- codes[intersect(rownames(codes), nodeIds), ,
-                drop = FALSE]
-        }
-        plotClusterAmbiguity(diagSce(), codes, st$colsUsed)
+        plotClusterAmbiguity(diagSce(), st$metaD[[st$somCodesName]],
+            st$colsUsed)
     })
     invisible(st)
 }
