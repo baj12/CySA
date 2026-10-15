@@ -154,6 +154,28 @@ test_that(".subsetSceByGroups restricts cells to the chosen groups", {
   expect_lt(ncol(subA), ncol(sce))
 })
 
+test_that("computeClusterAmbiguity only considers rivals within somCodes", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10, n_markers = 3)
+  somCodes <- S4Vectors::metadata(sce)$SOM_codes
+  markers <- S4Vectors::metadata(sce)$map$colsUsed
+  keepNodes <- as.character(1:3)
+  sceSub <- sce[, as.character(sce$cluster_id) %in% keepNodes]
+
+  full <- computeClusterAmbiguity(sceSub, somCodes, markers)
+  restricted <- computeClusterAmbiguity(
+    sceSub, somCodes[keepNodes, , drop = FALSE], markers
+  )
+
+  # Dropping the other 7 nodes as potential rivals can only move each
+  # cell's nearest-rival distance up (fewer candidates), so ambiguity
+  # against the restricted codebook must be <= against the full one.
+  common <- intersect(full$cluster_id, restricted$cluster_id)
+  expect_true(all(
+    restricted$pctAmbiguous[match(common, restricted$cluster_id)] <=
+      full$pctAmbiguous[match(common, full$cluster_id)]
+  ))
+})
+
 test_that("Diagnostics and ordered-heatmap panels respect a group selection", {
   test_app <- make_test_app(n_cells = 200, n_nodes = 10)
 
@@ -164,10 +186,18 @@ test_that("Diagnostics and ordered-heatmap panels respect a group selection", {
     ))
     suppressWarnings(session$flushReact())
 
+    allAmbiguity <- diagAmbiguityPlot()$data
+
     session$setInputs(diagGroups = "groupA")
     session$flushReact()
     expect_s3_class(diagMdsPlot(), "ggplot")
-    expect_s3_class(diagAmbiguityPlot(), "ggplot")
+
+    groupAAmbiguity <- diagAmbiguityPlot()
+    expect_s3_class(groupAAmbiguity, "ggplot")
+    # groupA has 5 nodes out of 10; its ambiguity codebook/cells must be
+    # restricted to those 5, not computed against the whole SOM.
+    expect_length(levels(groupAAmbiguity$data$cluster_id), 5L)
+    expect_lt(nrow(groupAAmbiguity$data), nrow(allAmbiguity))
 
     allMarkers <- colnames(S4Vectors::metadata(test_app$sce)$SOM_codes)
     session$setInputs(orderedHeatmapGroups = "groupA",

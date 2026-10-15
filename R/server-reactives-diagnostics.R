@@ -24,6 +24,18 @@
     diagSce <- shiny::reactive({
         .subsetSceByGroups(st$sce, st$rv$outputList, input$diagGroups)
     })
+    # Node ids of the selected groups, or NULL for "every group selected" --
+    # mirrors .subsetSceByGroups()'s own all-selected/empty shortcut, so the
+    # ambiguity codebook is restricted the same way the cells already are.
+    diagNodeIds <- shiny::reactive({
+        groups <- input$diagGroups
+        if (is.null(groups) || length(groups) == 0L ||
+            setequal(groups, names(st$rv$outputList))) {
+            return(NULL)
+        }
+        unique(unlist(lapply(st$rv$outputList[groups], as.character),
+            use.names = FALSE))
+    })
     st$diagMdsPlot <- shiny::reactive({
         plotSampleMDS(diagSce(), st$colsUsed, color_by = colorBy())
     })
@@ -34,8 +46,13 @@
         plotNRS(diagSce(), st$colsUsed, color_by = colorBy())
     })
     st$diagAmbiguityPlot <- shiny::reactive({
-        plotClusterAmbiguity(diagSce(), st$metaD[[st$somCodesName]],
-            st$colsUsed)
+        codes <- st$metaD[[st$somCodesName]]
+        nodeIds <- diagNodeIds()
+        if (!is.null(nodeIds)) {
+            codes <- codes[intersect(rownames(codes), nodeIds), ,
+                drop = FALSE]
+        }
+        plotClusterAmbiguity(diagSce(), codes, st$colsUsed)
     })
     invisible(st)
 }

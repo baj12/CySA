@@ -13,6 +13,9 @@
   on the Bodenmiller BCR-XL dataset (mean cell-to-code distance nearly
   doubled, and the fraction of ambiguous cells rose from 30% to 49%,
   when inflating an 8-marker lineage-only clustering to 17 markers).
+  Restricted to whichever clusters/groups are selected under "Clusters/
+  groups to include" -- picking a subset narrows the rival nodes
+  considered for ambiguity, not just the cells shown.
 
 # CySA 0.99.37
 
