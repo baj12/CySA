@@ -1,3 +1,19 @@
+# CySA 0.99.38
+
+## New features
+
+* Added a "Cluster ambiguity" tab to the Sample diagnostics panel: for
+  every cell, compares the distance to its own SOM node's code vector
+  against the distance to the nearest *other* node, and bar-plots the
+  percentage of each cluster's cells where those two distances are
+  nearly tied (`computeClusterAmbiguity()`/`plotClusterAmbiguity()`).
+  A high bar flags a node that is not well separated from its
+  neighbours -- a scale-free, quantitative symptom of clustering on too
+  many or poorly-discriminating marker dimensions, confirmed empirically
+  on the Bodenmiller BCR-XL dataset (mean cell-to-code distance nearly
+  doubled, and the fraction of ambiguous cells rose from 30% to 49%,
+  when inflating an 8-marker lineage-only clustering to 17 markers).
+
 # CySA 0.99.37
 
 ## New features

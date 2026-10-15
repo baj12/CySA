@@ -19,6 +19,7 @@
     output$diagMdsPlot <- shiny::renderPlot(st$diagMdsPlot())
     output$diagExprHeatmap <- shiny::renderPlot(st$diagExprHeatmapPlot())
     output$diagNrsPlot <- shiny::renderPlot(st$diagNrsPlot())
+    output$diagAmbiguityPlot <- shiny::renderPlot(st$diagAmbiguityPlot())
     invisible(NULL)
 }
 

@@ -402,19 +402,32 @@
                 "What it does: sample-level QC, reproducing CATALYST's",
                 "reference CyTOF-workflow figures inside CySA -- a",
                 "pseudobulk MDS plot of the samples, a per-sample",
-                "marker-expression heatmap, and per-marker",
-                "non-redundancy scores (NRS); see",
-                "vignettes/catalyst_workflow.Rmd for the original",
-                "figures these are modelled on."
+                "marker-expression heatmap, per-marker",
+                "non-redundancy scores (NRS), and a cluster-ambiguity",
+                "check; see vignettes/catalyst_workflow.Rmd for the",
+                "original figures the first three are modelled on."
             ),
             paste(
-                "What to expect: all three tabs are computed from",
-                "per-sample pseudobulk (median marker expression per",
-                "sample) restricted to whichever clusters/groups you",
-                "pick below -- this is a sample-centric view (\"what",
-                "do my samples look like, within this cell",
+                "What to expect: the MDS/heatmap/NRS tabs are computed",
+                "from per-sample pseudobulk (median marker expression",
+                "per sample) restricted to whichever clusters/groups",
+                "you pick below -- this is a sample-centric view",
+                "(\"what do my samples look like, within this cell",
                 "population?\"), not a per-cluster comparison (use",
                 "\"Ordered cluster heatmap\" below for that)."
+            ),
+            paste(
+                "The \"Cluster ambiguity\" tab is different: for every",
+                "cell it compares the distance to its own SOM node's",
+                "code vector against the distance to the nearest other",
+                "node, and bar-plots the percentage of",
+                "each cluster's cells where those two distances are",
+                "nearly tied. A high bar means that node is not well",
+                "separated from its neighbours -- often a sign of",
+                "clustering on too many or poorly-discriminating",
+                "markers (CATALYST's own guidance is to cluster on",
+                "lineage/\"type\" markers only); consider re-clustering",
+                "with fewer markers, or merging/reviewing that node."
             ),
             paste(
                 "How to use it: pick which saved clusters/groups to",

@@ -33,6 +33,10 @@
     st$diagNrsPlot <- shiny::reactive({
         plotNRS(diagSce(), st$colsUsed, color_by = colorBy())
     })
+    st$diagAmbiguityPlot <- shiny::reactive({
+        plotClusterAmbiguity(diagSce(), st$metaD[[st$somCodesName]],
+            st$colsUsed)
+    })
     invisible(st)
 }
 

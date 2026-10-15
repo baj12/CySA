@@ -32,7 +32,9 @@ utils::globalVariables(c(
     # diffcyt-helpers.R, server-reactives-diagnostics.R).
     "mds1", "mds2", "nrs", "color_by", "cluster_id",
     "diagMdsPlot", "diagExprHeatmapPlot", "diagNrsPlot",
-    "orderedHeatmapPlot", "diffResult"
+    "orderedHeatmapPlot", "diffResult",
+    # aes() column and output name of the cluster-ambiguity diagnostic.
+    "pctAmbiguous", "diagAmbiguityPlot"
 ))
 
 #' Cluster Selector Shiny Application

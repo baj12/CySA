@@ -58,7 +58,9 @@
             shiny::tabPanel("Expression heatmap",
                 .resizable(shiny::plotOutput("diagExprHeatmap"))),
             shiny::tabPanel("Marker NRS",
-                .resizable(shiny::plotOutput("diagNrsPlot")))
+                .resizable(shiny::plotOutput("diagNrsPlot"))),
+            shiny::tabPanel("Cluster ambiguity",
+                .resizable(shiny::plotOutput("diagAmbiguityPlot")))
         )
     )
 }

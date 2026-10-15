@@ -84,6 +84,49 @@ test_that("plotOrderedClusterHeatmap returns a plain heatmap w/o somStats", {
   expect_s3_class(p, "ggplot")
 })
 
+test_that("computeClusterAmbiguity summarises one row per cluster", {
+  sce <- CySA_example_sce(n_cells = 80, n_nodes = 6, n_markers = 3)
+  somCodes <- S4Vectors::metadata(sce)$SOM_codes
+  markers <- S4Vectors::metadata(sce)$map$colsUsed
+
+  summaryDf <- computeClusterAmbiguity(sce, somCodes, markers)
+
+  expect_true(is.data.frame(summaryDf))
+  expect_setequal(colnames(summaryDf),
+    c("cluster_id", "n", "meanDistToCode", "medianRatio", "pctAmbiguous"))
+  expect_setequal(summaryDf$cluster_id, unique(as.character(sce$cluster_id)))
+  expect_true(all(summaryDf$pctAmbiguous >= 0 & summaryDf$pctAmbiguous <= 100))
+  expect_equal(sum(summaryDf$n), ncol(sce))
+})
+
+test_that("computeClusterAmbiguity flags a cell nearly tied between nodes", {
+  sce <- CySA_example_sce(n_cells = 10, n_nodes = 2, n_markers = 2)
+  markers <- S4Vectors::metadata(sce)$map$colsUsed
+  somCodes <- matrix(c(0, 10, 0, 10), nrow = 2, ncol = 2,
+    dimnames = list(c("1", "2"), markers))
+  SummarizedExperiment::assay(sce, 1)[markers, ] <- 0
+  sce$cluster_id <- factor(rep(c("1", "2"), length.out = ncol(sce)))
+  # This cell sits almost exactly between the two codes: nearly ambiguous.
+  SummarizedExperiment::assay(sce, 1)[markers, 1] <- 4.9
+
+  cellDf <- CySA:::.cellCodeDistances(sce, somCodes, markers)
+  expect_gt(cellDf$rivalRatio[1], 0.9)
+})
+
+test_that("plotClusterAmbiguity returns a ggplot ordered worst-first", {
+  sce <- CySA_example_sce(n_cells = 80, n_nodes = 6, n_markers = 3)
+  somCodes <- S4Vectors::metadata(sce)$SOM_codes
+  markers <- S4Vectors::metadata(sce)$map$colsUsed
+
+  p <- plotClusterAmbiguity(sce, somCodes, markers)
+  expect_s3_class(p, "ggplot")
+
+  summaryDf <- computeClusterAmbiguity(sce, somCodes, markers)
+  plotted <- levels(p$data$cluster_id)
+  expect_equal(plotted,
+    as.character(summaryDf$cluster_id[order(-summaryDf$pctAmbiguous)]))
+})
+
 test_that("Diagnostics and ordered-heatmap outputs render inside the app", {
   test_app <- make_test_app()
 
@@ -94,6 +137,7 @@ test_that("Diagnostics and ordered-heatmap outputs render inside the app", {
     expect_s3_class(diagMdsPlot(), "ggplot")
     expect_s3_class(diagExprHeatmapPlot(), "ggplot")
     expect_s3_class(diagNrsPlot(), "ggplot")
+    expect_s3_class(diagAmbiguityPlot(), "ggplot")
     expect_true(!is.null(orderedHeatmapPlot()))
   })
 })
@@ -123,6 +167,7 @@ test_that("Diagnostics and ordered-heatmap panels respect a group selection", {
     session$setInputs(diagGroups = "groupA")
     session$flushReact()
     expect_s3_class(diagMdsPlot(), "ggplot")
+    expect_s3_class(diagAmbiguityPlot(), "ggplot")
 
     allMarkers <- colnames(S4Vectors::metadata(test_app$sce)$SOM_codes)
     session$setInputs(orderedHeatmapGroups = "groupA",

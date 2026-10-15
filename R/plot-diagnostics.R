@@ -287,3 +287,115 @@ plotOrderedClusterHeatmap <- function(somCodes, somStats, dend,
         labs(x = "n cells")
     cowplot::plot_grid(heat, bar, ncol = 2, rel_widths = c(3, 1), align = "h")
 }
+
+#' Per-Cell Distance to Own and Nearest-Rival SOM Code
+#'
+#' For every cell, the Euclidean distance (in marker space) to its own
+#' node's code vector, and to the \emph{nearest other} node's code vector.
+#' Their ratio is a scale-free measure of cluster separation: a ratio near
+#' 1 means the cell is barely closer to its assigned node than to some
+#' other node -- the node boundary there is not really resolving anything,
+#' a classic symptom of clustering on too many/poorly-discriminating
+#' marker dimensions (each extra dimension flattens the distance
+#' landscape between nodes; see \code{vignettes/catalyst_workflow.Rmd}'s
+#' discussion of clustering on type vs state markers).
+#'
+#' @param sce A \code{SingleCellExperiment}; the first assay is used.
+#' @param somCodes Nodes x markers matrix (e.g. \code{metadata(sce)$SOM_codes}).
+#' @param markers Marker (column) names to use for the distances;
+#'   \code{NULL} uses every column of \code{somCodes}.
+#'
+#' @return A data frame with one row per cell: \code{cluster_id},
+#'   \code{distToCode} (distance to its own node), and \code{rivalRatio}
+#'   (\code{distToCode} divided by the distance to the nearest other node).
+#'
+#' @keywords internal
+.cellCodeDistances <- function(sce, somCodes, markers = NULL) {
+    if (is.null(markers)) {
+        markers <- colnames(somCodes)
+    }
+    exprMat <- t(SummarizedExperiment::assay(sce, 1)[markers, , drop = FALSE])
+    codes <- somCodes[, markers, drop = FALSE]
+    clusterId <- as.character(SingleCellExperiment::colData(sce)$cluster_id)
+    ownIdx <- match(clusterId, rownames(codes))
+    if (anyNA(ownIdx)) {
+        stop("Some cells' cluster_id is not a row of somCodes.")
+    }
+    sqCells <- matrixStats::rowSums2(exprMat^2)
+    sqCodes <- matrixStats::rowSums2(codes^2)
+    dist2 <- outer(sqCells, sqCodes, "+") - 2 * (exprMat %*% t(codes))
+    n <- nrow(dist2)
+    ownDist2 <- dist2[cbind(seq_len(n), ownIdx)]
+    dist2[cbind(seq_len(n), ownIdx)] <- Inf
+    rivalDist2 <- matrixStats::rowMins(dist2)
+    data.frame(
+        cluster_id = clusterId,
+        distToCode = sqrt(pmax(ownDist2, 0)),
+        rivalRatio = sqrt(pmax(ownDist2, 0)) / sqrt(pmax(rivalDist2, 0))
+    )
+}
+
+#' Per-Cluster SOM Ambiguity Summary
+#'
+#' Aggregates \code{.cellCodeDistances()} by cluster: the percentage of
+#' each cluster's cells that are "ambiguous" (their own-node distance is
+#' within \code{1 - ambiguousThreshold} of the nearest rival node's
+#' distance), plus the mean distance-to-own-code.
+#'
+#' @inheritParams .cellCodeDistances
+#' @param ambiguousThreshold \code{rivalRatio} above which a cell counts as
+#'   ambiguous; the default (0.9) flags cells whose own node is at most
+#'   ~11% closer than the next-nearest node.
+#'
+#' @return A data frame with \code{cluster_id}, \code{n},
+#'   \code{meanDistToCode}, \code{medianRatio}, and \code{pctAmbiguous}.
+#'
+#' @keywords internal
+computeClusterAmbiguity <- function(sce, somCodes, markers = NULL,
+    ambiguousThreshold = 0.9) {
+    cellDf <- .cellCodeDistances(sce, somCodes, markers)
+    clusters <- sort(unique(cellDf$cluster_id))
+    data.frame(
+        cluster_id = clusters,
+        n = tapply(cellDf$distToCode, cellDf$cluster_id, length)[clusters],
+        meanDistToCode = tapply(cellDf$distToCode, cellDf$cluster_id,
+            mean)[clusters],
+        medianRatio = tapply(cellDf$rivalRatio, cellDf$cluster_id,
+            stats::median)[clusters],
+        pctAmbiguous = tapply(cellDf$rivalRatio, cellDf$cluster_id,
+            function(r) 100 * mean(r > ambiguousThreshold))[clusters]
+    )
+}
+
+#' Cluster SOM-Ambiguity Plot
+#'
+#' Bar plot of each cluster's percentage of "ambiguous" cells (see
+#' \code{computeClusterAmbiguity()}), ordered worst-first -- the clusters
+#' most in need of attention (merging, re-clustering with fewer/better
+#' markers, or just manual review) are shown first.
+#'
+#' @inheritParams computeClusterAmbiguity
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @keywords internal
+plotClusterAmbiguity <- function(sce, somCodes, markers = NULL,
+    ambiguousThreshold = 0.9) {
+    summaryDf <- computeClusterAmbiguity(sce, somCodes, markers,
+        ambiguousThreshold)
+    summaryDf <- summaryDf[order(-summaryDf$pctAmbiguous), ]
+    summaryDf$cluster_id <- factor(summaryDf$cluster_id,
+        levels = summaryDf$cluster_id)
+    ggplot(summaryDf, aes(x = cluster_id, y = pctAmbiguous)) +
+        geom_col(fill = "#dc3545") +
+        labs(
+            x = "Cluster (SOM node)", y = "Ambiguous cells (%)",
+            title = paste0(
+                "Cells whose own-node distance is within ",
+                round(100 * (1 - ambiguousThreshold)),
+                "% of the nearest rival node's distance"
+            )
+        ) +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 90, size = 6))
+}
