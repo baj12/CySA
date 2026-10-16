@@ -24,3 +24,9 @@ local
 CySA.proj
 Julia.shiny.R
 .posit/assistant
+
+# Downloaded case-study data (vignettes/spectral_flow_case_study.Rmd)
+vignettes/spectral_fcs/
+vignettes/*.html
+vignettes/*_cache/
+vignettes/*_files/

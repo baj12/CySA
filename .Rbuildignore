@@ -44,3 +44,4 @@ CySA.proj
 ^\.posit/assistant$
 ^vignettes/catalyst_workflow\.Rmd$
 ^vignettes/support$
+^vignettes/spectral_flow_case_study\.Rmd$

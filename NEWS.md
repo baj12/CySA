@@ -1,3 +1,17 @@
+# CySA 0.99.39
+
+## New features
+
+- Added `vignettes/spectral_flow_case_study.Rmd`, a self-contained, reproducible
+  case study demonstrating CySA on real spectral flow cytometry data: 56 FCS
+  files (8 manually-gated populations x 7 donors, 24-marker Cytek Aurora panel)
+  from an openly-downloadable Zenodo record (DOI 10.5281/zenodo.15723074), with
+  the manual-gating labels hidden from FlowSOM clustering and used afterwards
+  only to score the result (adjusted Rand index) and cross-check the new
+  cluster-ambiguity diagnostic. Like `catalyst_workflow.Rmd`, it depends on an
+  external download and is excluded from the Bioconductor-submission vignette
+  build (`.Rbuildignore`). Added `flowCore` and `mclust` to `Suggests`.
+
 # CySA 0.99.38
 
 ## New features

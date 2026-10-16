@@ -1,0 +1,466 @@
+---
+title: "CySA on spectral flow cytometry data (Zenodo 10.5281/zenodo.15723074)"
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE,
+    fig.width = 7, fig.height = 5
+)
+```
+
+## Overview
+
+This vignette is a self-contained case study for showing CySA's dashboard on
+**real, high-dimensional spectral flow cytometry data**, with an independent
+ground truth to check the clustering against.
+
+The data are 56 FCS files (8 manually-gated immune populations x 7 healthy
+donors, 24-marker panel) acquired on a **Cytek Aurora, a 5-laser spectral
+flow cytometer** -- this is conventional fluorescence flow cytometry read
+across many spectral channels and unmixed, *not* mass cytometry (CyTOF),
+even though the marker-class vocabulary below ("type"/"state") follows the
+same convention CATALYST uses for CyTOF data. The samples are peripheral
+blood: lymphocytes Ficoll-isolated from whole blood drawn from 7 healthy,
+non-pregnant adult donors (de-identified discarded clinical material), per
+the dataset's own documentation on Zenodo, published openly there (DOI
+[10.5281/zenodo.15723074](https://zenodo.org/records/15723074), CC-BY-4.0) as
+a companion dataset to Tursi *et al.* 2025, *"Automated descriptive cell type
+naming in flow and mass cytometry with CytoPheno"*, Scientific Reports
+15:26750. The files are organised one population/donor combination per FCS
+file (e.g. `"B_cells_donor1.fcs"`), which gives a hidden ground-truth label
+(`known_population`) for every cell -- the manual gating already done by the
+original authors. We hide this label from FlowSOM and only use it afterwards
+to score the unsupervised clustering (adjusted Rand index), and to annotate
+the CySA dashboard screenshots.
+
+The download is plain HTTPS with no login or API key (unlike FlowRepository,
+whose anonymous FCS download is gated behind an account), which is why this
+dataset was chosen over the FlowRepository alternatives that were considered
+first. Like `catalyst_workflow.Rmd`, this vignette depends on an external
+download and real FlowSOM clustering (a few minutes of compute on ~725,000
+cells), so it is excluded from the Bioconductor-submission vignette build
+(see `.Rbuildignore`); run it directly with `rmarkdown::render()` or chunk by
+chunk to validate the case study yourself.
+
+```{r libs}
+library(flowCore)
+library(CATALYST)
+library(SingleCellExperiment)
+library(S4Vectors)
+library(ggplot2)
+library(viridis)
+## Load the live package source rather than `library(CySA)`: this vignette
+## is meant to validate in-development features (e.g. the cluster-ambiguity
+## diagnostic), and an older *installed* copy of CySA would silently lack
+## them. If this chunk is run outside the package tree, replace the path
+## below with the CySA source checkout's root, or use library(CySA) once a
+## matching version is installed.
+if (requireNamespace("devtools", quietly = TRUE) &&
+        file.exists("../DESCRIPTION")) {
+    devtools::load_all("..", quiet = TRUE)
+} else {
+    library(CySA)
+}
+```
+
+## Data download
+
+All 56 FCS files plus the panel description (`Panel.pdf`) are fetched
+directly from Zenodo's file API, one HTTPS GET per file, into a fresh,
+otherwise-empty directory (FCS files are untrusted downloaded data, so they
+are kept apart from this script and are never executed as code).
+
+```{r download, eval = !dir.exists("spectral_fcs") || length(list.files("spectral_fcs", pattern = "\\.fcs$")) < 56}
+record_id <- "15723074"
+api_url <- paste0("https://zenodo.org/api/records/", record_id)
+rec <- jsonlite::fromJSON(api_url, simplifyDataFrame = FALSE)
+files_info <- rec$files
+
+dir.create("spectral_fcs", showWarnings = FALSE)
+for (f in files_info) {
+    dest <- file.path("spectral_fcs", f$key)
+    if (!file.exists(dest)) {
+        download.file(f$links$self, dest, mode = "wb", quiet = TRUE)
+    }
+}
+fcs_files <- list.files("spectral_fcs", pattern = "\\.fcs$", full.names = TRUE)
+length(fcs_files)
+```
+
+```{r list-files}
+fcs_files <- list.files("spectral_fcs", pattern = "\\.fcs$", full.names = TRUE)
+stopifnot(length(fcs_files) == 56)
+basename(fcs_files)[seq_len(6)]
+```
+
+## Building a single SingleCellExperiment
+
+Each file name encodes `<population>_donor<N>.fcs`. The Zenodo record notes
+that the fluorophores for CCR7 and HELIOS were swapped on donors 5-7; reading
+every file by its FCS `$PnS` (antigen/description) field rather than by
+physical channel name sidesteps that, since the `desc` for a given antigen is
+consistent across all 56 files regardless of which physical channel it was
+measured on for a particular donor.
+
+```{r common-markers}
+## The 24 markers present with a non-NA $PnS description in every one of
+## the 56 files.
+common_markers <- c(
+    "CCR4", "GZMB", "HELIOS", "GNLY", "CCR7", "CD4", "CD56", "CD3", "CD19",
+    "CD95", "CD8", "CD103", "CD16", "CD14", "CD69", "CCR6", "HLA-DR", "CD25",
+    "CD45RA", "PD1", "CD39", "FOXP3", "TIGIT", "CD45"
+)
+
+parse_name <- function(fn) {
+    base <- sub("\\.fcs$", "", basename(fn))
+    donor <- as.integer(sub("_donor", "",
+        regmatches(base, regexpr("_donor[0-9]+$", base))))
+    pop <- gsub(" ", "_", sub("_donor[0-9]+$", "", base))
+    list(pop = pop, donor = donor)
+}
+```
+
+```{r build-flowset}
+ffs <- list()
+md_rows <- list()
+for (fp in fcs_files) {
+    info <- parse_name(fp)
+    ff <- read.FCS(fp, transformation = FALSE, truncate_max_range = FALSE)
+    pd <- pData(parameters(ff))
+    idx <- match(common_markers, as.character(pd$desc))
+    stopifnot(!anyNA(idx))
+    m <- exprs(ff)[, idx, drop = FALSE]
+    colnames(m) <- common_markers
+    storage.mode(m) <- "double"
+    fn <- paste0(info$pop, "_donor", info$donor)
+    ffs[[fn]] <- flowFrame(m)
+    md_rows[[fn]] <- data.frame(
+        file_name = fn, sample_id = paste0("donor", info$donor),
+        donor = paste0("donor", info$donor), known_population = info$pop,
+        stringsAsFactors = FALSE
+    )
+}
+fs <- as(ffs, "flowSet")
+flowCore::sampleNames(fs) <- names(ffs)
+md <- do.call(rbind, md_rows)
+md <- md[match(names(ffs), md$file_name), ]
+table(md$known_population)
+```
+
+Fourteen lineage ("type") markers define the FlowSOM grid; the remaining ten
+activation/exhaustion ("state") markers are kept in the `SingleCellExperiment`
+for visual inspection in CySA but are not used for clustering.
+
+```{r panel}
+state_markers <- c(
+    "CD69", "CD25", "CD39", "PD1", "TIGIT", "FOXP3", "GZMB", "CCR4", "CCR6",
+    "HELIOS"
+)
+panel <- data.frame(
+    fcs_colname = common_markers, antigen = common_markers,
+    marker_class = ifelse(common_markers %in% state_markers, "state", "type"),
+    stringsAsFactors = FALSE
+)
+table(panel$marker_class)
+```
+
+```{r prep-data}
+sce <- prepData(fs, panel, md, features = panel$fcs_colname,
+    transform = TRUE, cofactor = 150, FACS = TRUE,
+    md_cols = list(file = "file_name", id = "sample_id",
+        factors = c("donor", "known_population")))
+dim(sce)
+length(type_markers(sce))
+length(state_markers(sce))
+```
+
+## FlowSOM clustering (ground truth hidden)
+
+`known_population` is carried as a `colData` column but never passed to
+`cluster()` -- it is only used afterwards, to score the clustering.
+
+```{r cluster}
+set.seed(1234)
+sce <- cluster(sce, features = type_markers(sce),
+    xdim = 10, ydim = 10, maxK = 12, seed = 1234, verbose = FALSE)
+```
+
+```{r ari}
+meta12 <- cluster_ids(sce, "meta12")
+ari <- mclust::adjustedRandIndex(meta12, sce$known_population)
+cat("Adjusted Rand index (meta12 vs. known_population):",
+    round(ari, 3), "\n")
+table(known = sce$known_population, meta12 = meta12)
+```
+
+An ARI around 0.8 is a strong recovery for a fully unsupervised 10x10 SOM run
+on real spectral data: B cells and NK cells typically separate almost
+perfectly, while naive/effector-memory/TEMRA CD8 T-cell subsets show some
+cross-cluster mixing -- a real, biologically-expected differentiation
+continuum rather than a clustering failure. This is exactly the kind of
+structure the next section is built to show visually, cluster by cluster.
+
+## Building the CySA inputs
+
+CySA's dashboard works from `metadata(sce)$SOM_codes` (node x marker code
+matrix), `metadata(sce)$SOM_stats` (per-node cell counts), and a
+`cluster_id`/`sample_id` `colData`, following the same recipe as
+`catalyst_workflow.Rmd`. All 24 markers (type + state) are kept in the assay
+so that every CySA panel -- not only the ones restricted to the clustering
+markers -- can be used to inspect the data.
+
+```{r build-cysa-sce}
+all_markers <- rownames(sce)
+type_m <- type_markers(sce)
+cid <- as.integer(cluster_ids(sce, "som100"))
+n_nodes <- nlevels(cluster_ids(sce, "som100"))
+
+expr_t <- t(assay(sce, "exprs")[type_m, ])
+som_codes <- apply(expr_t, 2, function(v) {
+    tapply(v, factor(cid, levels = seq_len(n_nodes)), median)
+})
+som_codes[is.na(som_codes)] <- 0
+
+cysa_sce <- SingleCellExperiment(
+    assays = list(exprs = assay(sce, "exprs")[all_markers, ]),
+    colData = DataFrame(
+        sample_id = factor(sce$sample_id),
+        cluster_id = factor(cid, levels = seq_len(n_nodes)),
+        known_population = factor(sce$known_population)
+    ),
+    metadata = list(
+        SOM_codes = som_codes,
+        SOM_stats = data.frame(
+            id = seq_len(n_nodes),
+            n = as.numeric(table(factor(cid, levels = seq_len(n_nodes)))),
+            mean = 0, median = 0, rdQu = 0, max = 0
+        ),
+        map = list(colsUsed = type_m),
+        experiment_info = as.data.frame(metadata(sce)$experiment_info)
+    )
+)
+rownames(cysa_sce) <- all_markers
+colnames(cysa_sce) <- paste0("cell", seq_len(ncol(cysa_sce)))
+cysa_sce
+```
+
+```{r prep-cluster-selector}
+pair_d <- function(markers) {
+    n <- length(markers)
+    pairs <- list()
+    k <- 1
+    for (i in seq_len(n - 1)) {
+        for (j in seq(i + 1, n)) {
+            pairs[[paste0("d", k)]] <- c(markers[i], markers[j])
+            k <- k + 1
+        }
+    }
+    pairs[seq_len(min(6, length(pairs)))]
+}
+
+set.seed(1234)
+prepped <- prepClusterSelectorData(cysa_sce, total_cells_to_sample = 8000,
+    dList = pair_d(c("CD3", "CD4", "CD8", "CD19", "CD56", "CD45RA", "CCR7")),
+    seed = 1234)
+
+dend <- stats::as.dendrogram(
+    stats::hclust(stats::dist(som_codes), method = "ward.D2"))
+dendTable <- data.frame(
+    id = seq_len(n_nodes), label = as.character(seq_len(n_nodes))
+)
+clusterPatientTable <- table(
+    sample_id = colData(cysa_sce)$sample_id,
+    cluster_id = colData(cysa_sce)$cluster_id
+)
+somRasterData <- data.frame(
+    x = rep(seq_len(10), 10), y = rep(seq_len(10), each = 10),
+    id = seq_len(100)
+)
+for (m in type_m) somRasterData[[m]] <- som_codes[, m]
+```
+
+## Identifying and characterizing outlier (ambiguous) cells
+
+The main point of this case study is not the ARI number above, but what
+CySA's dashboard lets you *see*: which individual SOM nodes -- and which
+individual cells -- sit in genuinely ambiguous positions in the
+14-dimensional lineage-marker space, and what those cells actually look
+like. `computeClusterAmbiguity()`/`.cellCodeDistances()` (the functions
+behind the dashboard's "Cluster ambiguity" tab) compare, for every cell,
+its distance to its own SOM node's code vector against its distance to the
+*nearest other* node; a ratio near 1 means the node boundary there is not
+really resolving anything. The three figures below identify where that
+happens and characterize what those cells are.
+
+```{r ambiguity-percell}
+## Per-cell distances (internal; reached via CySA::: for the same reason
+## as computeClusterAmbiguity() above).
+cell_amb <- CySA:::.cellCodeDistances(cysa_sce, som_codes, type_m)
+cell_amb$known_population <- as.character(cysa_sce$known_population)
+cell_amb$ambiguous <- cell_amb$rivalRatio > 0.9
+
+## A manageable subsample for the scatter/violin plots below (the bar
+## chart and the ambiguous-fraction numbers use every one of the 725,748
+## cells; only the per-cell figures are subsampled, purely for plotting
+## speed and file size).
+expr_df <- as.data.frame(t(SummarizedExperiment::assay(cysa_sce, "exprs")))
+set.seed(1234)
+plot_idx <- sample(nrow(cell_amb), min(20000, nrow(cell_amb)))
+plot_df <- cbind(cell_amb[plot_idx, ], expr_df[plot_idx, ])
+```
+
+### Figure 1 -- identification: which SOM nodes are ambiguous?
+
+```{r fig-ambiguity-bar, fig.width = 8, fig.height = 4.5}
+ambiguity <- CySA:::computeClusterAmbiguity(cysa_sce, som_codes, type_m)
+node_pop <- tapply(as.character(cysa_sce$known_population),
+    cysa_sce$cluster_id, function(x) names(sort(table(x), decreasing = TRUE))[1])
+ambiguity$majority_population <- node_pop[as.character(ambiguity$cluster_id)]
+ambiguity <- ambiguity[order(-ambiguity$pctAmbiguous), ]
+ambiguity$cluster_id <- factor(ambiguity$cluster_id, levels = ambiguity$cluster_id)
+
+ggplot(ambiguity, aes(x = cluster_id, y = pctAmbiguous, fill = majority_population)) +
+    geom_col() +
+    scale_fill_viridis_d(name = "Majority\nknown population") +
+    labs(
+        x = "SOM node (worst-first)", y = "Ambiguous cells (%)",
+        title = "Node-level ambiguity, coloured by the node's majority ground-truth label",
+        subtitle = "This is exactly what the dashboard's \"Cluster ambiguity\" tab shows"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+Ambiguity is not spread evenly across the SOM grid: it concentrates in
+nodes whose majority label is a CD4/CD8 T-cell subset, while nodes
+dominated by B cells or NK cells sit further down the ranking -- i.e. the
+*same* clusters the ARI confusion matrix flagged as mixed are the ones
+this purely-geometric, label-free diagnostic independently flags as
+ambiguous.
+
+```{r ambiguity-by-population}
+aggregate(pctAmbiguous ~ majority_population, ambiguity, mean)
+```
+
+### Figure 2 -- where ambiguous cells sit in marker space
+
+```{r fig-ambiguity-scatter, fig.width = 10, fig.height = 4.5}
+plot_df <- plot_df[order(plot_df$ambiguous), ]  # draw ambiguous cells last (on top)
+
+p_truth <- ggplot(plot_df, aes(x = CD45RA, y = CCR7, colour = known_population)) +
+    geom_point(size = 0.3, alpha = 0.5) +
+    scale_colour_viridis_d(name = "Known\npopulation") +
+    labs(title = "Coloured by ground truth", x = "CD45RA", y = "CCR7") +
+    theme_minimal() +
+    theme(legend.position = "bottom", legend.text = element_text(size = 6))
+
+p_amb <- ggplot(plot_df, aes(x = CD45RA, y = CCR7, colour = ambiguous)) +
+    geom_point(size = 0.3, alpha = 0.6) +
+    scale_colour_manual(
+        name = NULL, values = c(`FALSE` = "grey80", `TRUE` = "#dc3545"),
+        labels = c(`FALSE` = "Confident", `TRUE` = "Ambiguous (own/rival > 0.9)")
+    ) +
+    guides(colour = guide_legend(override.aes = list(size = 2, alpha = 1))) +
+    labs(title = "Ambiguous cells highlighted", x = "CD45RA", y = "CCR7") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+
+cowplot::plot_grid(p_truth, p_amb, ncol = 2)
+```
+
+CCR7 and CD45RA define the classic naive/memory/effector axis for T cells.
+Ambiguity (computed in the full 14-marker space, not just these two) is
+dense through most of the T-cell region -- these markers vary continuously
+rather than in sharply separated clusters, so many neighbouring SOM nodes
+are genuinely similar there. The informative contrast is the tight,
+mostly-*grey* pocket at the bottom right: that is the TEMRA CD8 T-cell
+population, which Figure 1 above already identified as one of the least
+ambiguous groups, and here it stands out visually from its neighbours as
+confidently assigned, while the rest of the differentiation continuum
+around it is densely flagged. The two figures are telling the same story
+from two different angles.
+
+### Figure 3 -- characterizing ambiguous cells: which populations do they mix?
+
+If ambiguous SOM nodes sit at genuine boundaries between cell states, they
+should contain a *blend* of ground-truth populations, while confidently-
+assigned nodes should be close to pure. The composition below compares the
+15 most- and 15 least-ambiguous nodes (by `pctAmbiguous`, Figure 1) in
+terms of their known-population make-up.
+
+```{r fig-ambiguity-composition, fig.width = 7, fig.height = 4.5}
+most_amb_nodes <- utils::head(ambiguity$cluster_id, 15)
+least_amb_nodes <- utils::tail(ambiguity$cluster_id, 15)
+
+node_group <- ifelse(
+    as.character(cysa_sce$cluster_id) %in% as.character(most_amb_nodes),
+    "15 most ambiguous nodes",
+    ifelse(
+        as.character(cysa_sce$cluster_id) %in% as.character(least_amb_nodes),
+        "15 least ambiguous nodes", NA
+    )
+)
+comp_df <- data.frame(
+    group = node_group, known_population = as.character(cysa_sce$known_population)
+)
+comp_df <- comp_df[!is.na(comp_df$group), ]
+comp_df$group <- factor(comp_df$group,
+    levels = c("15 most ambiguous nodes", "15 least ambiguous nodes"))
+
+ggplot(comp_df, aes(x = group, fill = known_population)) +
+    geom_bar(position = "fill", width = 0.6) +
+    scale_fill_viridis_d(name = "Known population") +
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_discrete(labels = scales::label_wrap(12)) +
+    labs(x = NULL, y = "Fraction of cells",
+        title = "Ground-truth composition: most- vs. least-ambiguous nodes") +
+    theme_minimal()
+```
+
+The least-ambiguous nodes are dominated by one or two populations each;
+the most-ambiguous nodes are a genuine mixture of several -- the
+diagnostic is not just finding cells that look unusual, it is finding the
+specific SOM nodes where two or more real cell states are being forced
+to share a single code vector. That is the characterization this case
+study is meant to demonstrate: CySA's cluster-ambiguity diagnostic, read
+together with the dashboard's visual panels, locates and explains the
+transition zones between well-defined states rather than just flagging
+generically "weird" cells.
+
+## Launching the dashboard
+
+```{r clusterSelector}
+app <- clusterSelector(
+    sce = prepped$sce,
+    sce_subsampled = prepped$sce_subsampled,
+    dList = prepped$dList,
+    dend = dend,
+    dendTable = dendTable,
+    clusterPatientTable = clusterPatientTable,
+    somRasterData = somRasterData,
+    somRasterObj = NULL
+)
+```
+
+```{r runApp, eval = FALSE}
+shiny::runApp(app)
+```
+
+To validate the case study interactively: open the dashboard, use the "Clusters/groups to include" selector on the Sample diagnostics box to pick the SOM nodes that fall into the dense top-right region of the CD3-vs-CD4 2D plot, check the per-marker SOM raster heatmap (14 lineage markers side by side) to read off a node's full phenotype at a glance, look at the dendrogram-ordered marker-by-cluster heatmap for clean lineage-specific blocks (e.g. a CD19-high block for B cells, a CD16/GNLY-high block for NK cells), and compare the "Cluster ambiguity" tab's per-node ambiguity against Figure 1 above -- ambiguous nodes should concentrate among the CD8 T-cell differentiation subsets, not among B/NK cells.
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```
