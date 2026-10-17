@@ -30,3 +30,14 @@ vignettes/spectral_fcs/
 vignettes/*.html
 vignettes/*_cache/
 vignettes/*_files/
+
+# Scratch / one-off exploration files -- never committed
+bame.html
+bioc_submission_checks.R
+bioc_submission_checks.out
+cofactors_bcr.rds
+intro.html
+test.RData
+test2.RData
+test_datasets.Rmd
+testfile

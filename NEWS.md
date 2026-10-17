@@ -11,6 +11,40 @@
   cluster-ambiguity diagnostic. Like `catalyst_workflow.Rmd`, it depends on an
   external download and is excluded from the Bioconductor-submission vignette
   build (`.Rbuildignore`). Added `flowCore` and `mclust` to `Suggests`.
+- `spectral_flow_case_study.Rmd` now also runs `CyEt::optimizeBvalueMatrix()`
+  (an independent, Shapiro-Wilk-normality-based per-marker arcsinh cofactor
+  estimator) over all 24 markers and compares its choices against the
+  vignette's own paper-derived cofactors, with cached results
+  (`vignettes/support/cyet/`) so the ~2-hour, 24-marker optimization is not
+  re-run on every vignette build. The comparison answers three questions
+  directly: (1) the vignette's cofactors are already close to each marker's
+  own ARI-optimal sweep value, not just a plausible guess; (2) CyEt's
+  normality-optimal cofactors do *not* improve clustering here (ARI
+  0.87-0.88 vs. 0.97-0.98) because normality-optimization pulls a bimodal
+  marker's two populations together, which is the opposite of what
+  SOM-based clustering wants; and (3) CyEt's own fits show a real, roughly
+  two-fold systematic difference between type/lineage markers (median 368,
+  excluding CD45) and state/functional markers (median 685) -- though this
+  asymmetry has no effect on `cluster()`'s output, since `CATALYST::cluster()`
+  only ever uses `type_markers(sce)` as SOM features. Also documents a
+  genuine instability found in CyEt's own search for CD45 specifically (two
+  different local optima depending on the tested cofactor range). Added
+  `CyEt` to `Suggests`.
+
+## Bug fixes
+
+- `spectral_flow_case_study.Rmd` compared SOM cluster assignments against
+  the manual-gating ground truth using the raw factor levels of
+  `cluster_ids(sce, "som100")` instead of the underlying integer node IDs,
+  which silently desynchronized the two whenever a factor's levels were not
+  already sorted numerically; all ARI and cluster-ambiguity cross-checks in
+  the vignette now go through
+  `as.integer(as.character(cluster_ids(sce, "som100")))` consistently.
+- Corrected several per-marker arcsinh cofactors in the vignette's panel
+  definition that did not match the values implied by the source paper's own
+  figures, and added a cofactor-sensitivity sweep (ARI vs. a range of flat
+  cofactors) to justify the chosen values empirically rather than by
+  inspection alone.
 
 # CySA 0.99.38
 
