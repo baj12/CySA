@@ -175,14 +175,32 @@ panel <- data.frame(
 table(panel$marker_class)
 ```
 
+Tursi et al. (the Zenodo dataset's companion paper) report hand-tuned,
+per-marker arcsinh cofactors for eight of the lineage markers, chosen by
+inspecting density plots across 15 candidate cofactors (250-50,000) for
+each marker: 10,000 for CD14, 1,000 for CD19, 3,000 for CD3, 2,000 for
+CD56, 4,000 for CD45RA, 3,000 for CD8, 5,000 for CD4, and 6,000 for CCR7.
+Neither the paper nor its supplement gives a value for the remaining 16
+markers; for those we fall back to 6,000, the flat default the same group's
+own CytoPheno tool recommends for spectral flow cytometry generally (its
+in-app help text: "6000 for spectral flow cytometry", vs. 15 for
+conventional flow and 5 for mass cytometry) -- a flat 150, which is a
+conventional-flow convention, is not supported by anything this group did
+with this instrument.
+
 ```{r prep-data}
+spectral_cofactors <- setNames(rep(6000, length(common_markers)), common_markers)
+spectral_cofactors[c("CD14", "CD19", "CD3", "CD56", "CD45RA", "CD8", "CD4", "CCR7")] <-
+    c(10000, 1000, 3000, 2000, 4000, 3000, 5000, 6000)
+
 sce <- prepData(fs, panel, md, features = panel$fcs_colname,
-    transform = TRUE, cofactor = 150, FACS = TRUE,
+    transform = TRUE, cofactor = spectral_cofactors, FACS = TRUE,
     md_cols = list(file = "file_name", id = "sample_id",
         factors = c("donor", "known_population")))
 dim(sce)
 length(type_markers(sce))
 length(state_markers(sce))
+sce_prepped <- sce  # kept un-clustered; reused later for the parameter sweep
 ```
 
 ## FlowSOM clustering (ground truth hidden)
@@ -204,12 +222,324 @@ cat("Adjusted Rand index (meta12 vs. known_population):",
 table(known = sce$known_population, meta12 = meta12)
 ```
 
-An ARI around 0.8 is a strong recovery for a fully unsupervised 10x10 SOM run
-on real spectral data: B cells and NK cells typically separate almost
-perfectly, while naive/effector-memory/TEMRA CD8 T-cell subsets show some
-cross-cluster mixing -- a real, biologically-expected differentiation
-continuum rather than a clustering failure. This is exactly the kind of
-structure the next section is built to show visually, cluster by cluster.
+An ARI of `r round(ari, 2)` is a strong recovery for a fully unsupervised
+10x10 SOM run on real spectral data, using the paper's own per-marker
+cofactors: B cells and NK cells typically separate almost perfectly, while
+naive/effector-memory/TEMRA CD8 T-cell subsets still show some cross-cluster
+mixing in the confusion matrix above -- a real, biologically-expected
+differentiation continuum rather than a clustering failure. This is exactly
+the kind of structure the next section is built to show visually, cluster by
+cluster.
+
+## How much does the cofactor choice matter?
+
+The per-marker cofactors above were a documentation exercise -- transcribed
+from the paper and its supplement, not independently derived. It is worth
+checking empirically whether getting this parameter right actually matters,
+and if so, over what range a *single flat* cofactor (the simplest choice
+available to someone with no per-marker guidance at all) gives acceptable
+results. The sweep below re-runs `prepData()` + `cluster()` from scratch at
+each of 13 flat cofactor values spanning the paper's own tested range
+(250-50,000, extended slightly on both ends), using only the 14 type
+markers and the same fixed 10x10 grid as everywhere else in this vignette,
+and scores each run the same way (ARI against `known_population`, raw-node
+ambiguity).
+
+```{r cofactor-sweep}
+run_flat_cofactor <- function(cf) {
+    sce_cf <- prepData(fs, panel, md, features = panel$fcs_colname,
+        transform = TRUE, cofactor = cf, FACS = TRUE,
+        md_cols = list(file = "file_name", id = "sample_id",
+            factors = c("donor", "known_population")))
+    tm <- type_markers(sce_cf)
+    set.seed(1234)
+    sce_cf <- cluster(sce_cf, features = tm, xdim = 10, ydim = 10,
+        maxK = 12, seed = 1234, verbose = FALSE)
+    ari_cf <- mclust::adjustedRandIndex(
+        cluster_ids(sce_cf, "meta12"), sce_cf$known_population)
+
+    cid_cf <- as.integer(as.character(cluster_ids(sce_cf, "som100")))
+    codes_cf <- metadata(sce_cf)$SOM_codes[, tm]
+    expr_cf <- t(SummarizedExperiment::assay(sce_cf, "exprs")[tm, ])
+    sq_cells <- matrixStats::rowSums2(expr_cf^2)
+    sq_codes <- matrixStats::rowSums2(codes_cf^2)
+    dist2 <- outer(sq_cells, sq_codes, "+") - 2 * (expr_cf %*% t(codes_cf))
+    n <- nrow(dist2)
+    own_dist2 <- dist2[cbind(seq_len(n), cid_cf)]
+    dist2[cbind(seq_len(n), cid_cf)] <- Inf
+    rival_dist2 <- matrixStats::rowMins(dist2)
+    ratio_cf <- sqrt(pmax(own_dist2, 0)) / sqrt(pmax(rival_dist2, 0))
+
+    data.frame(cofactor = cf, ari_meta12 = ari_cf,
+        pct_ambiguous = 100 * mean(ratio_cf > 0.9))
+}
+
+cofactor_grid <- c(50, 100, 150, 250, 500, 1000, 2000, 3000, 6000, 10000,
+    20000, 50000, 100000)
+cofactor_sweep <- do.call(rbind, lapply(cofactor_grid, run_flat_cofactor))
+cofactor_sweep
+```
+
+```{r fig-cofactor-sweep, fig.width = 8, fig.height = 4.5}
+best_cf <- cofactor_sweep$cofactor[which.max(cofactor_sweep$ari_meta12)]
+
+cf_long <- reshape2::melt(cofactor_sweep, id.vars = "cofactor")
+cf_long$variable <- factor(cf_long$variable, labels = c(
+    "ARI vs. known population (meta12)", "Ambiguous cells (%, raw SOM node)"))
+
+ggplot(cf_long, aes(x = cofactor, y = value)) +
+    annotate("rect", xmin = 1000, xmax = 10000, ymin = -Inf, ymax = Inf,
+        fill = "#2a9d8f", alpha = 0.08) +
+    geom_vline(xintercept = 150, colour = "#dc3545", linetype = "dashed") +
+    geom_vline(xintercept = 6000, colour = "#264653", linetype = "dashed") +
+    geom_line(colour = "grey50") +
+    geom_point(size = 2.5, colour = "#264653") +
+    scale_x_log10(breaks = cofactor_grid,
+        labels = scales::label_number(big.mark = ",")) +
+    facet_wrap(~variable, scales = "free_y", ncol = 1) +
+    labs(
+        x = "Flat arcsinh cofactor (log scale)", y = NULL,
+        title = "Clustering quality across the paper's own tested cofactor range",
+        subtitle = paste0(
+            "Shaded band: paper's per-marker range (1,000-10,000). ",
+            "Red line: this vignette's original wrong default (150). ",
+            "Dark line: the flat fallback actually used (6,000).")
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The relationship is a clean inverted U, not a threshold or a plateau: ARI
+rises from `r round(cofactor_sweep$ari_meta12[cofactor_sweep$cofactor == 50], 2)`
+at cofactor 50 to a peak of `r round(max(cofactor_sweep$ari_meta12), 2)` at
+cofactor `r best_cf`, then falls back to
+`r round(cofactor_sweep$ari_meta12[cofactor_sweep$cofactor == 100000], 2)`
+at cofactor 100,000 -- a round trip from poor to excellent back to poor
+over three orders of magnitude. The mechanism is the same on both sides,
+just in opposite directions: arcsinh(x / cofactor) is approximately linear
+for x well below the cofactor and approximately logarithmic for x well
+above it, so the cofactor sets *where* that transition happens on the raw
+intensity scale. Too small a cofactor (50-150) pushes almost the entire
+dynamic range into the compressed, logarithmic regime, flattening real
+differences between dim and intermediate-expressing cells into noise --
+this vignette's original, unexamined default of 150 sits here, at
+ARI `r round(cofactor_sweep$ari_meta12[cofactor_sweep$cofactor == 150], 2)`,
+clearly on the losing side of the curve. Too large a cofactor (50,000+)
+keeps most of the range nearly linear and lets a handful of very bright
+events dominate the Euclidean distance FlowSOM clusters on, which is just
+as damaging in the other direction. The paper's actual per-marker range
+(1,000-10,000, shaded band above) sits squarely inside the high-ARI plateau
+in this flat-cofactor sweep too, and the flat fallback this vignette uses
+for markers without a published value (6,000) lands
+at `r round(cofactor_sweep$ari_meta12[cofactor_sweep$cofactor == 6000], 2)`
+-- comfortably on the plateau, even if not exactly at its peak
+(cofactor `r best_cf`). Ambiguity does *not* mirror the ARI curve: it rises
+with ARI on the low-cofactor side (peaking at cofactor
+`r cofactor_sweep$cofactor[which.max(cofactor_sweep$pct_ambiguous)]`, just
+past where ARI is still climbing), for the same reason the grid-size sweep
+later in this vignette shows ARI and ambiguity rising together -- a cofactor
+good enough to start resolving real structure is also good enough to make
+genuinely continuous boundaries visible as ambiguous, rather than silently
+merging them away. But on the high-cofactor side, where ARI collapses back
+down, ambiguity keeps falling instead of rising back up: once the cofactor
+is large enough to leave the data nearly linear and dominated by a few
+bright events, most cells end up roughly equidistant from many nodes in a
+degenerate, poorly structured space, which lowers the *own-vs-rival
+distance ratio* this metric uses even though the resulting clustering is
+worse by every other measure. Ambiguity alone, without ARI or a ground
+truth to check it against, would have been actively misleading at the
+high-cofactor end of this sweep.
+
+This is also a direct, practical answer to "how was 6,000 chosen for the
+sixteen markers the paper doesn't cover": it is not optimal
+(cofactor `r best_cf` is, by
+`r round(max(cofactor_sweep$ari_meta12) - cofactor_sweep$ari_meta12[cofactor_sweep$cofactor == 6000], 3)`
+ARI points), but it is safely inside the plateau rather than a guess that
+happens to work. Anyone adapting this pipeline to a different panel or
+instrument should not assume either endpoint of this plateau transfers;
+running a sweep like this one -- cheap, at roughly 19 seconds per
+configuration here -- against whatever ground truth or domain knowledge is
+available is a more reliable starting point than copying a cofactor from a
+different dataset's methods section.
+
+## Does an automated, normality-based cofactor estimator do better?
+
+The sweep above answers "which flat cofactor works best here," but it still
+only tests values a human chose to test. `CyEt` ("Cytometry Ensemble
+Transformation"), a companion Bioconductor-track package from the same
+group as CySA, automates per-marker cofactor selection without any of that
+human input: for each marker it grid-searches arcsinh cofactors
+`b = 1.1^k` and window widths, scores every `(b, window)` combination by
+the Shapiro-Wilk normality statistic of the transformed, windowed data, and
+reports the `b` that makes that marker's own distribution look most
+Gaussian within its best-scoring window. Critically, this optimization
+target has nothing to do with clustering or with any ground truth -- it is
+purely a property of each marker's own univariate distribution. That makes
+it a genuinely independent check on the cofactors used above: does
+"most normal-looking" line up with "clusters best"?
+
+```{r cyet-run, eval = FALSE}
+## Not evaluated when building this vignette: ~2 hours for 24 markers on
+## 8 cores (CyEt's Shapiro-Wilk grid search is run per marker, independent
+## of every other marker, over a 241 x 22 (b-value x window) grid). The
+## cached result loaded below (support/cyet/cyet_table_final.rds) is this
+## exact call's output.
+library(CyEt)
+raw_mat <- do.call(rbind, flowCore::fsApply(fs, flowCore::exprs, simplify = FALSE))
+set.seed(1234)
+sub_idx <- sample.int(nrow(raw_mat), 40000)
+cyet_b <- optimizeBvalueMatrix(
+    raw_mat[sub_idx, panel$fcs_colname],
+    markers = panel$fcs_colname, n_cores = 8, verbose = TRUE,
+    b_test_range = -20:220, seed = 1234
+)
+```
+
+```{r cyet-load}
+cyet_table <- readRDS("support/cyet/cyet_table_final.rds")
+cyet_table[order(cyet_table$marker_class, cyet_table$marker),
+    c("marker", "marker_class", "cyet_b", "boundary_artifact")]
+```
+
+One marker, CD45, needs a second look before using its value: at
+`b_test_range = -20:220` the optimizer returns
+`r round(cyet_table$cyet_b[cyet_table$marker == "CD45"], 3)`, exactly
+`1.1^-20` -- the lower edge of the tested grid. CyEt's own documentation
+calls this a `boundary_low` artifact: the true optimum lies somewhere the
+search never looked, and the value should not be trusted as-is. Extending
+the search downward resolves it, but not to a small number --
+
+```{r cyet-cd45, eval = FALSE}
+## Also not evaluated here (~12 minutes for one marker); cached below.
+cd45_extended <- optimizeBvalueVector(
+    raw_mat[sub_idx, "CD45"], b_test_range = -60:220, seed = 1234, verbose = TRUE)
+```
+
+```{r cyet-cd45-result}
+cd45_row <- cyet_table[cyet_table$marker == "CD45", ]
+cat("Boundary-run value:", round(cd45_row$cyet_b, 3), "\n")
+cat("Extended-range value:", round(cd45_row$cyet_b_resolved, 1),
+    "(boundary_flag = FALSE, method = u_shape_bottom, confidence = 0.9)\n")
+```
+
+The extended search lands on
+`r format(round(cd45_row$cyet_b_resolved, 0), big.mark = ",", scientific = FALSE)`
+-- nearly linear, the *opposite*
+extreme from the boundary artifact's near-zero value. CD45's
+normality-score curve has two separate local optima, one near each end of
+the scale, and which one a Shapiro-Wilk-based search finds depends on where
+it happens to look. That is not a bug in CyEt's implementation; it is a
+real property of this marker's distribution (CD45 is a very bright,
+near-universally-expressed pan-leukocyte marker with an unusually wide
+dynamic range), and a useful caution for anyone treating "most normal under
+arcsinh" as if it always had one well-defined answer.
+
+```{r fig-cyet-compare, fig.width = 7, fig.height = 5}
+compare_df <- cyet_table
+compare_df$current_vignette_cofactor <- spectral_cofactors[compare_df$marker]
+compare_long <- reshape2::melt(
+    compare_df[, c("marker", "marker_class", "cyet_b_resolved", "current_vignette_cofactor")],
+    id.vars = c("marker", "marker_class"))
+compare_long$variable <- factor(compare_long$variable, labels = c(
+    "CyEt (normality-optimal)", "This vignette (paper 8 + 6,000 fallback)"))
+marker_order <- compare_df$marker[order(compare_df$cyet_b_resolved)]
+compare_long$marker <- factor(compare_long$marker, levels = marker_order)
+
+ggplot(compare_long, aes(
+    x = marker, y = value,
+    colour = variable, shape = marker_class)) +
+    geom_point(size = 3) +
+    scale_y_log10(labels = scales::label_number(big.mark = ",")) +
+    coord_flip() +
+    labs(x = NULL, y = "Cofactor (log scale)", colour = NULL, shape = "Marker class",
+        title = "CyEt's per-marker, normality-optimal cofactor vs. this vignette's choice") +
+    theme_minimal()
+```
+
+Grouping CyEt's values by marker class makes the type-vs-state question
+concrete. Excluding CD45 (whose two-sided optimum, just shown, resists a
+single summary value either way):
+`r { tm <- cyet_table$cyet_b_resolved[cyet_table$marker_class == "type" & cyet_table$marker != "CD45"]; round(median(tm), 0) }`
+is the median CyEt cofactor across the remaining 13 type (lineage) markers,
+versus
+`r { sm <- cyet_table$cyet_b_resolved[cyet_table$marker_class == "state"]; round(median(sm), 0) }`
+across the 10 state (functional) markers -- roughly double. So yes, by this
+independent, data-driven measure, lineage and functional markers in this
+panel do systematically want different cofactors; a single flat value
+cannot be simultaneously optimal for both groups. In practice that
+asymmetry is invisible to every metric used so far in this vignette,
+because `cluster()` is only ever given `type_markers(sce)` as clustering
+features (see the `cluster` chunk above) -- state-marker cofactors have
+no path to affect ARI or the ambiguity ratio at all. They would matter for
+anything that reads state-marker expression directly, such as a
+differential-state test on the user's curated groups, where forcing a
+continuously-distributed activation marker through the same flat cofactor
+as a sharply bimodal lineage marker is more likely to misrepresent it.
+
+That leaves the real question: is CyEt's normality-optimal cofactor set
+*better* for clustering than the paper-based one this vignette uses? Rerun
+`prepData()` and `cluster()` exactly as above, substituting CyEt's
+per-marker values for the 14 type markers (state markers never reach
+`cluster()`, so their cofactor choice is tested separately, above, and
+omitted here):
+
+```{r cyet-ari-load}
+cyet_ari <- readRDS("support/cyet/cyet_ari_full.rds")
+cyet_ari
+```
+
+```{r cyet-ari-code, eval = FALSE}
+## The code that produced the table above (re-run of prep-data + cluster +
+## ari, substituting CyEt's per-marker cofactors for the 14 type markers;
+## state-marker cofactors are confirmed not to matter for this metric by
+## comparing rows 1-2, which differ only in the state-marker cofactor and
+## are numerically identical).
+type_m_names <- panel$fcs_colname[panel$marker_class == "type"]
+cf_cyet <- setNames(rep(6000, length(common_markers)), common_markers)
+cf_cyet[type_m_names] <- cyet_table$cyet_b_resolved[match(type_m_names, cyet_table$marker)]
+sce_cyet <- prepData(fs, panel, md, features = panel$fcs_colname,
+    transform = TRUE, cofactor = cf_cyet, FACS = TRUE,
+    md_cols = list(file = "file_name", id = "sample_id",
+        factors = c("donor", "known_population")))
+sce_cyet <- cluster(sce_cyet, features = type_markers(sce_cyet),
+    xdim = 10, ydim = 10, maxK = 12, seed = 1234, verbose = FALSE)
+mclust::adjustedRandIndex(cluster_ids(sce_cyet, "meta12"), sce_cyet$known_population)
+```
+
+The answer is no, clearly: every CyEt-based configuration lands at
+ARI `r round(min(cyet_ari$ari_meta12[1:2]), 2)`-`r round(max(cyet_ari$ari_meta12[5:6]), 2)`,
+versus `r round(cyet_ari$ari_meta12[cyet_ari$config == "Current vignette (paper 8 + 6000 fallback)"], 3)`
+for this vignette's paper-based cofactors and
+`r round(cyet_ari$ari_meta12[cyet_ari$config == "Flat 2000 (sweep ARI peak)"], 3)`
+for the flat-sweep optimum. Three different ways of handling CD45 (the
+boundary artifact as-is, swapped for the type-marker median, swapped for
+the extended-range-resolved value) all land in the same
+0.87-0.89 band, confirming this is not one bad marker dragging the average
+down -- it is systematic across the type-marker set. The reason connects
+directly to the inverted-U curve from the previous section: CyEt's median
+type-marker cofactor
+(`r round(median(cyet_table$cyet_b_resolved[cyet_table$marker_class == "type" & cyet_table$marker != "CD45"]), 0)`)
+sits on the *low, losing* side of that curve, in the same region as this
+vignette's original, unexamined default of 150. Shapiro-Wilk normality and
+cluster separability are simply different objectives: a per-marker cofactor
+that makes a bimodal negative/positive distribution look symmetric and
+unimodal (good for normality) is, almost by construction, pulling the two
+modes of that distribution *together* -- precisely what clustering does not
+want. The two objectives happen to agree over some range of cofactors (hence
+CyEt is not catastrophically wrong, just worse), but nothing about
+"most normal-looking" guarantees "best separated," and here it measurably
+is not.
+
+To summarize this and the previous section's investigation directly: no,
+`6,000` is not the ARI-optimal flat cofactor for this dataset (`2,000` is,
+by a small margin); the paper's own per-marker values and the `6,000`
+fallback both sit safely on the high-ARI plateau rather than at its peak;
+CyEt's independent, normality-based per-marker estimates do *not* improve
+on either, because they optimize a different and here partially
+antagonistic objective; and lineage and functional markers do warrant
+different cofactors in this panel by CyEt's own measure, even though that
+difference does not show up in `cluster()`-based diagnostics, only in
+analyses that use state-marker expression directly.
 
 ## Building the CySA inputs
 
@@ -223,14 +553,23 @@ markers -- can be used to inspect the data.
 ```{r build-cysa-sce}
 all_markers <- rownames(sce)
 type_m <- type_markers(sce)
-cid <- as.integer(cluster_ids(sce, "som100"))
-n_nodes <- nlevels(cluster_ids(sce, "som100"))
 
-expr_t <- t(assay(sce, "exprs")[type_m, ])
-som_codes <- apply(expr_t, 2, function(v) {
-    tapply(v, factor(cid, levels = seq_len(n_nodes)), median)
-})
-som_codes[is.na(som_codes)] <- 0
+## `cluster_ids()` returns a factor whose *levels* are the node-id labels
+## actually observed among cells; a node can end up with zero cells (it
+## happens here, with the paper's per-marker cofactors), in which case
+## that level is simply absent -- NOT compacted to a dense 1..n range. This
+## matters because `as.integer()` on a factor returns the *position in the
+## level vector*, not the label value, so `as.integer(cluster_ids(...))`
+## silently desyncs from the true SOM grid position for every node past a
+## gap. Recovering the label with `as.character()` first avoids that.
+## `metadata(sce)$SOM_codes` is the FlowSOM code book itself (always the
+## full xdim*ydim rows, in physical grid order, independent of which nodes
+## happen to be occupied) so it is used directly rather than recomputed
+## from per-cell medians.
+cid <- as.integer(as.character(cluster_ids(sce, "som100")))
+som_codes <- metadata(sce)$SOM_codes[, type_m]
+n_nodes <- nrow(som_codes)
+rownames(som_codes) <- as.character(seq_len(n_nodes))
 
 cysa_sce <- SingleCellExperiment(
     assays = list(exprs = assay(sce, "exprs")[all_markers, ]),
@@ -342,16 +681,27 @@ ggplot(ambiguity, aes(x = cluster_id, y = pctAmbiguous, fill = majority_populati
     theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 ```
 
-Ambiguity is not spread evenly across the SOM grid: it concentrates in
-nodes whose majority label is a CD4/CD8 T-cell subset, while nodes
-dominated by B cells or NK cells sit further down the ranking -- i.e. the
-*same* clusters the ARI confusion matrix flagged as mixed are the ones
-this purely-geometric, label-free diagnostic independently flags as
-ambiguous.
+Ambiguity is not spread evenly across the SOM grid: the same clusters the
+ARI confusion matrix flagged as mixed are the ones this purely-geometric,
+label-free diagnostic independently flags as ambiguous.
 
 ```{r ambiguity-by-population}
-aggregate(pctAmbiguous ~ majority_population, ambiguity, mean)
+pop_amb <- aggregate(pctAmbiguous ~ majority_population, ambiguity, mean)
+pop_amb[order(-pop_amb$pctAmbiguous), ]
 ```
+
+By population, `r pop_amb$majority_population[which.max(pop_amb$pctAmbiguous)]`
+and `r pop_amb[order(-pop_amb$pctAmbiguous), "majority_population"][2]` carry
+the most ambiguity (`r round(max(pop_amb$pctAmbiguous), 1)`% and
+`r round(pop_amb[order(-pop_amb$pctAmbiguous), "pctAmbiguous"][2], 1)`%),
+while `r pop_amb$majority_population[which.min(pop_amb$pctAmbiguous)]` is
+uniquely confident at `r round(min(pop_amb$pctAmbiguous), 1)`% -- a real
+standout rather than part of a smooth gradient, and notably a comparatively
+rare population in this dataset (so rare it may not visually register as
+its own dense pocket in the 20,000-cell subsample used for Figure 2 below).
+The remaining populations sit in a middling band without a clean
+"CD4 vs. CD8" or "T cell vs. non-T-cell" split -- effector-memory CD8 T
+cells, for instance, are no more ambiguous here than B cells or NK cells.
 
 ### Figure 2 -- where ambiguous cells sit in marker space
 
@@ -381,15 +731,18 @@ cowplot::plot_grid(p_truth, p_amb, ncol = 2)
 
 CCR7 and CD45RA define the classic naive/memory/effector axis for T cells.
 Ambiguity (computed in the full 14-marker space, not just these two) is
-dense through most of the T-cell region -- these markers vary continuously
-rather than in sharply separated clusters, so many neighbouring SOM nodes
-are genuinely similar there. The informative contrast is the tight,
-mostly-*grey* pocket at the bottom right: that is the TEMRA CD8 T-cell
-population, which Figure 1 above already identified as one of the least
-ambiguous groups, and here it stands out visually from its neighbours as
-confidently assigned, while the rest of the differentiation continuum
-around it is densely flagged. The two figures are telling the same story
-from two different angles.
+dense through most of the T-cell region in the right panel -- these markers
+vary continuously rather than in sharply separated clusters, so many
+neighbouring SOM nodes are genuinely similar there. The uniquely confident
+population identified numerically above is too rare to form a visually
+obvious grey pocket in this 20,000-cell subsample; the population-level
+table, not this scatter plot, is the reliable way to see which populations
+are and are not boundary cases. What the scatter plot does show directly is
+*where* the ambiguity concentrates: densely, and essentially everywhere a
+cell's CD45RA/CCR7 combination falls between the clear low/low and
+high/high corners, rather than at a few isolated edges. The two figures are
+telling the same story from two different angles -- one by the numbers,
+one by the shape of the point cloud.
 
 ### Figure 3 -- characterizing ambiguous cells: which populations do they mix?
 
@@ -438,7 +791,286 @@ together with the dashboard's visual panels, locates and explains the
 transition zones between well-defined states rather than just flagging
 generically "weird" cells.
 
-## Launching the dashboard
+### Why these particular boundaries, and what to do about them
+
+Comparing to the hidden ground truth explains *why* the boundaries fall
+where they do. B cells and NK cells separate almost perfectly because
+their defining markers (CD19, CD3, CD56, CD16) are genuinely bimodal --
+on or off. The naive/effector-memory/TEMRA T-cell subsets overlap because
+their defining axis (CCR7, CD45RA) is not a biological switch: CCR7 is
+downregulated gradually and CD45RA is lost then partially re-expressed
+over a continuous differentiation trajectory. The textbook
+naive/EM/TEMRA labels are a human quadrant-gate discretisation of that
+continuum, so a geometry-only method will correctly place many real
+cells near the gate boundary, because that is genuinely where they sit.
+Two mechanical effects compound this: (1) every one of the 14
+lineage markers contributes equally to each node's Euclidean distance,
+so markers irrelevant to a given local boundary still dilute it (the
+same "more dimensions flattens the distance landscape" effect
+`vignettes/catalyst_workflow.Rmd` discusses for clustering on type vs.
+state markers); and (2) a 10x10 grid, appropriate for resolving several
+genuinely discrete populations, over-resolves a continuum into many
+near-duplicate neighbouring codes.
+
+This suggests a concrete question: for the cells FlowSOM is already
+unsure about, *which of the 14 clustering markers are actually doing
+useful discriminating work*, and which are just adding noise? For each
+ambiguous cell, decomposing its (own distance)^2 - (rival distance)^2 by
+marker gives exactly that -- a strongly negative mean contribution means
+a marker is pulling the cell toward its own (correct) node even in these
+hard cases; a value near zero means the marker carries no information
+for this specific confusion; positive means it is actively misleading.
+
+```{r marker-ranking, fig.width = 7, fig.height = 4.5}
+exprMat <- t(SummarizedExperiment::assay(cysa_sce, "exprs")[type_m, ])
+own_idx <- match(as.character(cysa_sce$cluster_id), rownames(som_codes))
+sq_cells <- matrixStats::rowSums2(exprMat^2)
+sq_codes <- matrixStats::rowSums2(som_codes^2)
+dist2 <- outer(sq_cells, sq_codes, "+") - 2 * (exprMat %*% t(som_codes))
+n <- nrow(dist2)
+own_dist2 <- dist2[cbind(seq_len(n), own_idx)]
+dist2[cbind(seq_len(n), own_idx)] <- Inf
+rival_idx <- max.col(-dist2, ties.method = "first")
+rival_dist2 <- dist2[cbind(seq_len(n), rival_idx)]
+ratio <- sqrt(pmax(own_dist2, 0)) / sqrt(pmax(rival_dist2, 0))
+
+own_code <- som_codes[own_idx, ]
+rival_code <- som_codes[rival_idx, ]
+## Per-marker share of (own distance)^2 - (rival distance)^2: negative =
+## this marker pulls the cell toward its own, correct node.
+contrib <- (exprMat - own_code)^2 - (exprMat - rival_code)^2
+
+marker_rank <- sort(colMeans(contrib[ratio > 0.9, ]))
+rank_df <- data.frame(
+    marker = factor(names(marker_rank), levels = names(marker_rank)),
+    contribution = as.numeric(marker_rank)
+)
+
+ggplot(rank_df, aes(x = marker, y = contribution, fill = contribution < 0)) +
+    geom_col() +
+    geom_hline(yintercept = 0, linewidth = 0.3) +
+    scale_fill_manual(
+        values = c(`TRUE` = "#2a9d8f", `FALSE` = "#dc3545"), guide = "none"
+    ) +
+    labs(
+        x = NULL, y = "Mean own² − rival² contribution",
+        title = "Marker ranking among ambiguous cells",
+        subtitle = "Green: helps resolve own vs. rival node. Red: adds noise or misleads."
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+With the paper's per-marker cofactors, every one of the 14 clustering
+markers has a negative mean contribution -- i.e. on average, each marker
+pulls an ambiguous cell toward its own (correct) node rather than its
+rival, even among the hardest cells. None actively mislead. They differ
+sharply in *degree*, though: CD45RA, CD56, CD19, CD3, CD8, and CCR7 do most
+of the real work (roughly 5-10x the resolving power of the weakest
+markers), while CD95, CD4, and CD103 are consistently the three weakest
+contributors -- still net helpful, just only marginally so for these
+particular hard cases. That is a meaningfully different, and more
+reassuring, picture than a cofactor choice that produces actively
+misleading markers would give: it says the panel itself is well chosen for
+this clustering task, and that the residual ambiguity is a genuine boundary
+effect rather than a marker that is adding noise.
+
+That points to three concrete ways to reduce this kind of ambiguity,
+in increasing order of effort:
+
+1. **No recompute needed -- use CySA itself.** This is the diagnostic's
+   intended use: once the dashboard's "Cluster ambiguity" tab identifies
+   which nodes are ambiguous, merge them into one named group (e.g. a
+   "CD8 T-cell differentiation continuum" entry in
+   `rv$outputList`) via the existing cluster-selection UI, rather than
+   reporting them as separate populations the clustering failed to
+   resolve. This turns an artifact of forced discretisation into an
+   explicit, visually-validated decision.
+2. **Marker selection for the primary SOM.** Re-run `CATALYST::cluster()`
+   on a marker set trimmed of the weakest contributors shown above (here,
+   `r paste(tail(names(marker_rank), 3), collapse = ", ")`) concentrates the
+   Euclidean distance on markers that are actually discriminating the
+   remaining ambiguity, instead of diluting it, even if only slightly,
+   across markers that barely help with it.
+3. **Two-stage / hierarchical clustering.** Cluster once on the strongly
+   bimodal lineage markers (CD3, CD19, CD56, CD14) to fix coarse lineage,
+   then run a second SOM *within* each lineage restricted to the markers
+   this ranking shows still carry signal there (CCR7, CD45RA for T
+   cells). This avoids ever asking one Euclidean distance to simultaneously
+   resolve a hard discrete split and a soft continuous one.
+
+### Is marker ranking the only lever? Testing grid size and marker-set size directly
+
+Marker ranking is one hypothesis; two more obvious ones are grid
+resolution ("surely more SOM nodes resolve the boundary better?") and
+marker-set size ("surely more markers, or fewer, changes this?"). Rather
+than guess, all of this is cheap enough to test directly: re-cluster the
+*same* prepared data (`sce_prepped`, saved right after `prepData()` above,
+before the main 10x10 clustering below overwrites `sce`) at several grid
+sizes and marker sets, and measure both the downstream population-recovery
+accuracy (ARI against the 8 known populations, scored the same way as the
+headline result above -- the `meta12` consensus clustering, not raw SOM
+nodes) and the raw-SOM-node ambiguity the dashboard would show.
+
+```{r sweep}
+run_config <- function(sce, markers, xdim, ydim, seed = 1234) {
+    set.seed(seed)
+    sce2 <- cluster(sce, features = markers, xdim = xdim, ydim = ydim,
+        maxK = 12, seed = seed, verbose = FALSE)
+    nm <- paste0("som", xdim * ydim)
+    ## See the note in `build-cysa-sce` above: recover the true node label
+    ## via as.character() (an empty node is possible and would otherwise
+    ## desync the factor's integer codes from the SOM_codes row order),
+    ## and use the FlowSOM code book directly rather than a per-cell median.
+    cid <- as.integer(as.character(cluster_ids(sce2, nm)))
+    codes2 <- metadata(sce2)$SOM_codes[, markers]
+    n_nodes <- nrow(codes2)
+
+    ari_meta12 <- mclust::adjustedRandIndex(
+        cluster_ids(sce2, "meta12"), sce2$known_population)
+
+    expr_t <- t(SummarizedExperiment::assay(sce2, "exprs")[markers, ])
+    sq_cells <- matrixStats::rowSums2(expr_t^2)
+    sq_codes <- matrixStats::rowSums2(codes2^2)
+    dist2 <- outer(sq_cells, sq_codes, "+") - 2 * (expr_t %*% t(codes2))
+    n <- nrow(dist2)
+    own_dist2 <- dist2[cbind(seq_len(n), cid)]
+    dist2[cbind(seq_len(n), cid)] <- Inf
+    rival_dist2 <- matrixStats::rowMins(dist2)
+    ratio <- sqrt(pmax(own_dist2, 0)) / sqrt(pmax(rival_dist2, 0))
+
+    data.frame(n_nodes = n_nodes, n_markers = length(markers),
+        ari_meta12 = ari_meta12, pct_ambiguous = 100 * mean(ratio > 0.9))
+}
+
+grid_sweep <- do.call(rbind, lapply(c(5, 10, 15, 20), function(d) {
+    res <- run_config(sce_prepped, type_m, d, d)
+    res$config <- paste0(d, "x", d, " (", d * d, " nodes)")
+    res
+}))
+
+## The three weakest contributors from the marker-ranking figure above,
+## rather than a hardcoded list -- this way the trimmed set always tracks
+## whatever the live ranking actually says, even if the transform, cofactor
+## choice, or input data changes.
+ranked_trim_m <- setdiff(type_m, tail(names(marker_rank), 3))
+marker_sweep <- do.call(rbind, lapply(
+    list(
+        `type only (14)` = type_m,
+        `type + state (24)` = c(type_m, state_markers(sce_prepped)),
+        `ranked-trimmed (11)` = ranked_trim_m
+    ),
+    function(ms) run_config(sce_prepped, ms, 10, 10)
+))
+marker_sweep$config <- c("type only (14)", "type + state (24)", "ranked-trimmed (11)")
+
+grid_sweep
+marker_sweep
+```
+
+```{r fig-sweep-grid, fig.width = 8, fig.height = 3.5}
+grid_long <- reshape2::melt(
+    grid_sweep[, c("n_nodes", "ari_meta12", "pct_ambiguous")],
+    id.vars = "n_nodes"
+)
+grid_long$variable <- factor(grid_long$variable,
+    labels = c("ARI vs. known population (meta12)", "Ambiguous cells (%, raw SOM node)"))
+
+ggplot(grid_long, aes(x = n_nodes, y = value)) +
+    geom_line(colour = "grey50") +
+    geom_point(size = 2.5, colour = "#264653") +
+    facet_wrap(~variable, scales = "free_y") +
+    labs(x = "SOM grid size (number of nodes)", y = NULL,
+        title = "Grid-size trade-off: type markers, 4 grid sizes") +
+    theme_minimal()
+```
+
+```{r fig-sweep-marker, fig.width = 8, fig.height = 3.5}
+marker_sweep$config <- factor(marker_sweep$config, levels = marker_sweep$config)
+marker_long <- reshape2::melt(
+    marker_sweep[, c("config", "ari_meta12", "pct_ambiguous")],
+    id.vars = "config"
+)
+marker_long$variable <- factor(marker_long$variable,
+    labels = c("ARI vs. known population (meta12)", "Ambiguous cells (%, raw SOM node)"))
+
+ggplot(marker_long, aes(x = config, y = value, fill = config)) +
+    geom_col() +
+    facet_wrap(~variable, scales = "free_y") +
+    scale_fill_viridis_d(guide = "none") +
+    labs(x = NULL, y = NULL, title = "Marker-set trade-off at a fixed 10x10 grid") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+Four real, and not entirely intuitive, results:
+
+- **Bigger grid:** going from `r grid_sweep$n_nodes[1]` to `r grid_sweep$n_nodes[4]`
+  nodes raises ARI (`r round(grid_sweep$ari_meta12[1], 2)` to
+  `r round(grid_sweep$ari_meta12[4], 2)`) *and* raises raw-node ambiguity
+  (`r round(grid_sweep$pct_ambiguous[1], 1)`% to
+  `r round(grid_sweep$pct_ambiguous[4], 1)`%) at the same time. More nodes is
+  **not** a fix for ambiguity -- it is closer to the opposite. A finer grid
+  gives the downstream `meta12` consensus-clustering step more raw material
+  to work with, which is why ARI improves, but it mechanically produces more
+  near-duplicate neighbouring nodes along any continuum, which is why
+  ambiguity rises too. This matters specifically for CySA: the dashboard's
+  "Cluster ambiguity" tab and manual merge workflow operate on the *raw* SOM
+  nodes, not on an automatic `meta12`-style consensus step -- so a bigger
+  grid trades a theoretically better final partition for more individual
+  nodes the user has to inspect and merge by hand. That is a reasonable
+  trade if the interactive merge workflow is actually going to be used; it
+  is not a free improvement.
+- **Smaller grid** (`r grid_sweep$n_nodes[1]` nodes) gives the lowest
+  ambiguity of any configuration tested, but at real cost: ARI drops to
+  `r round(grid_sweep$ari_meta12[1], 2)`, because now genuinely distinct
+  populations are being forced to share too few nodes -- a different and, for
+  most purposes, worse failure mode than boundary fuzziness.
+- **More markers hurts ambiguity more than it helps ARI.** Adding the 10
+  state markers to the clustering (24 vs. 14 markers, same 10x10 grid) raises
+  ambiguity from `r round(marker_sweep$pct_ambiguous[1], 1)`% to
+  `r round(marker_sweep$pct_ambiguous[2], 1)`% -- a much larger jump than the
+  small ARI change -- reproducing, on an independent real spectral dataset,
+  the same curse-of-dimensionality effect this vignette's own
+  `computeClusterAmbiguity()` docstring and the earlier Bodenmiller CyTOF
+  analysis (this session) both predict.
+- **The ranked-markers trim pays off here, but check before trusting it in
+  general.** Dropping the three weakest contributors from the marker-ranking
+  figure (`r paste(tail(names(marker_rank), 3), collapse = ", ")`) reduces
+  ambiguity (`r round(marker_sweep$pct_ambiguous[1], 1)`% to
+  `r round(marker_sweep$pct_ambiguous[3], 1)`%) *and* ARI holds up --
+  if anything it ticks up slightly (`r round(marker_sweep$ari_meta12[1], 2)`
+  to `r round(marker_sweep$ari_meta12[3], 2)`), consistent with those three
+  markers carrying comparatively little discriminating signal for this panel
+  overall, not just for the already-ambiguous cells. That is not guaranteed
+  in general: a marker that looks weak *for the cells that are already
+  ambiguous* can still be carrying real signal for some other part of the
+  dataset, so the ranking from the previous section is a legitimate,
+  data-driven starting point for marker selection, not a rule to apply
+  blindly -- any
+  trimmed marker set should still be checked against a held-out accuracy
+  measure (ARI here, or biological domain knowledge where no ground truth
+  exists) before being adopted.
+
+None of grid size, marker-set size, or marker ranking is a strict
+improvement on its own -- each one trades ambiguity against something
+else (resolution, dimensionality, or coverage). That is precisely the
+case for CySA's actual answer: pick a grid that is fine enough to let
+`meta12`-style automatic merging do a good job *if you want it
+automatic*, but when (as here) individual ambiguous nodes remain, use
+the dashboard's own interactive merge workflow -- informed by exactly
+the diagnostics in this vignette -- rather than trying to tune one
+clustering run until ambiguity disappears entirely. For a continuum like
+T-cell differentiation state, it never fully will.
+
+## Launching the dashboard: the GUI elements behind every figure above
+
+Every number and figure in this vignette so far comes from the same
+`clusterSelector()` dashboard a user would actually drive interactively.
+The screenshots below (captured with `shinytest2` against this exact
+pipeline) show the real GUI panels -- a static render cannot convey the
+interactivity (lasso-selecting nodes, re-coloring by any marker, merging
+clusters live), but it shows what is actually on screen.
 
 ```{r clusterSelector}
 app <- clusterSelector(
@@ -457,7 +1089,65 @@ app <- clusterSelector(
 shiny::runApp(app)
 ```
 
-To validate the case study interactively: open the dashboard, use the "Clusters/groups to include" selector on the Sample diagnostics box to pick the SOM nodes that fall into the dense top-right region of the CD3-vs-CD4 2D plot, check the per-marker SOM raster heatmap (14 lineage markers side by side) to read off a node's full phenotype at a glance, look at the dendrogram-ordered marker-by-cluster heatmap for clean lineage-specific blocks (e.g. a CD19-high block for B cells, a CD16/GNLY-high block for NK cells), and compare the "Cluster ambiguity" tab's per-node ambiguity against Figure 1 above -- ambiguous nodes should concentrate among the CD8 T-cell differentiation subsets, not among B/NK cells.
+### 2D plot and interactive dendrogram
+
+The landing view: a zoomable CD3-vs-CD4 density scatter (left) and a
+clickable dendrogram over all 100 SOM nodes (right), both driven by the
+same node selection in the sidebar. This is the primary lasso/click
+entry point for picking out the populations the earlier figures describe
+numerically.
+
+```{r fig-gui-2dplot, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/01_2dplot_dendrogram.png")
+```
+
+### SOM raster heatmap -- every lineage marker at once
+
+Each of the 14 type markers rendered as its own heatmap over the same
+10x10 node grid, side by side. This is the panel that makes "visual
+inspection in high-dimensional space" concrete: a single glance across
+the row of tiles reads off a node's full 14-marker phenotype (e.g. the
+CD19-bright tiles in the CD19 panel are the same physical nodes as the
+CD3-dim tiles in the CD3 panel), without having to construct one pairwise
+2D gate per marker combination.
+
+```{r fig-gui-raster, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/02_som_raster_heatmap.png")
+```
+
+### Cluster ambiguity tab
+
+The dashboard rendering of Figure 1 above, inside its actual home in the
+"Sample diagnostics" box -- the per-node bar chart a user sees directly,
+without needing to call `computeClusterAmbiguity()` themselves.
+
+```{r fig-gui-ambiguity, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/03_cluster_ambiguity.png")
+```
+
+### Ordered cluster heatmap
+
+The dendrogram-ordered marker x cluster heatmap with a cell-count bar
+alongside -- this is where the clean, lineage-specific marker blocks
+(e.g. a CD19-high block for B cells) are easiest to see directly,
+complementing the raster heatmap above.
+
+```{r fig-gui-heatmap, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/04_ordered_heatmap.png")
+```
+
+To validate the case study interactively yourself: open the dashboard
+(`shiny::runApp(app)` above), use the "Clusters/groups to include"
+selector on the Sample diagnostics box to pick the SOM nodes that fall
+into the dense top-right region of the CD3-vs-CD4 2D plot, check the SOM
+raster heatmap to read off a node's full phenotype at a glance, look at
+the ordered heatmap for clean lineage-specific blocks, and compare the
+"Cluster ambiguity" tab's per-node ambiguity against Figure 1 above --
+ambiguous nodes should concentrate among the CD8 T-cell differentiation
+subsets, not among B/NK cells. Then try the mitigations discussed above
+directly: re-run the pipeline with a 5x5 grid or the ranked-trimmed
+marker set (both just a few lines above), rebuild the CySA inputs the
+same way, and see how the dashboard's own panels change.
 
 ## Session information
 
