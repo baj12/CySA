@@ -49,6 +49,15 @@
 #' @param somCodesName Name of the SOM codes metadata slot.
 #' @param assay Name of the assay to use.
 #' @param seed Random seed for reproducibility.
+#' @param cellTypeCol Optional name of a colData column holding per-cell
+#'   known cell type labels. When given, the full \code{sce} is modified in
+#'   place: \code{metadata(sce)$node_labels} gains a data frame keyed by
+#'   node with the share of labeled cells carrying the node's majority label
+#'   (\code{purity}) and that label (\code{cell_type_majority}); nodes with
+#'   no labeled cells stay \code{NA}. The label column is also ensured on
+#'   the subsample (cached subsamples predating the column are merged from
+#'   the full object by their \code{id} colData column, or redrawn when no
+#'   such index exists).
 #'
 #' @return A list with \code{sce}, \code{sce_subsampled}, and \code{dList}.
 #'
@@ -60,7 +69,7 @@
 #' @export
 prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
     total_cells_to_sample = 100000, somCodesName = "SOM_codes",
-    assay = "exprs", seed = 123) {
+    assay = "exprs", seed = 123, cellTypeCol = NULL) {
     if (length(total_cells_to_sample) != 1 ||
         !is.numeric(total_cells_to_sample) || total_cells_to_sample < 1) {
         stop("'total_cells_to_sample' must be a positive scalar")
@@ -68,10 +77,15 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
     if (is.null(dList)) {
         dList <- .defaultDList(sce)
     }
+    if (!is.null(cellTypeCol)) {
+        S4Vectors::metadata(sce)$node_labels <- .buildNodeLabels(sce,
+            cellTypeCol, somCodesName)
+    }
     cacheFile <- if (!is.null(somFile)) {
         paste0(tools::file_path_sans_ext(somFile), ".subsampled.RData")
     }
-    if (!is.null(cacheFile) && file.exists(cacheFile)) {
+    cacheHit <- !is.null(cacheFile) && file.exists(cacheFile)
+    if (cacheHit) {
         env <- new.env()
         load(cacheFile, envir = env)
         sce_subsampled <- env$sce_subsampled
@@ -79,11 +93,15 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
         sce_subsampled <- withr::with_seed(seed, .subsampleSce(
             sce, total_cells_to_sample, somCodesName
         ))
-        if (!is.null(cacheFile)) {
-            save(sce_subsampled, file = cacheFile)
-        }
     }
     sce_subsampled <- .restoreSubsampledAssay(sce_subsampled, sce, assay)
+    sce_subsampled <- .mergeLabelsIntoSubsample(sce_subsampled, sce,
+        cellTypeCol, total_cells_to_sample, somCodesName, seed)
+    # The cache stores the merged subsample, so later calls find the label
+    # column already in place.
+    if (!cacheHit && !is.null(cacheFile)) {
+        save(sce_subsampled, file = cacheFile)
+    }
     list(sce = sce, sce_subsampled = sce_subsampled, dList = dList)
 }
 
@@ -123,6 +141,104 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
         levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
     )
     sub
+}
+
+#' Per-Node Summary of the Known Cell Type Labels
+#'
+#' Tallies the labels of the cells assigned to each SOM node over the full
+#' object and derives, per node, the share of labeled cells carrying the
+#' node's majority label (\code{purity}) and that majority label itself.
+#' Only labeled cells count: a node whose cells are all unlabeled gets
+#' \code{NA} in both columns ("unknown", never 0). Ties on the majority
+#' label are broken by taking the alphabetically first of the most frequent
+#' labels.
+#'
+#' @param sce A \code{SingleCellExperiment} with \code{cluster_id} in
+#'   \code{colData} and the SOM codes under \code{somCodesName}.
+#' @param cellTypeCol Name of the known cell type column in \code{colData}.
+#' @param somCodesName Name of the SOM codes metadata slot.
+#'
+#' @return A data frame keyed by node: \code{id}, \code{purity},
+#'   \code{cell_type_majority}.
+#'
+#' @keywords internal
+.buildNodeLabels <- function(sce, cellTypeCol, somCodesName = "SOM_codes") {
+    cd <- SingleCellExperiment::colData(sce)
+    if (!cellTypeCol %in% colnames(cd)) {
+        stop("cellTypeCol '", cellTypeCol,
+            "' not found in colData(sce)")
+    }
+    labels <- as.character(cd[[cellTypeCol]])
+    if (!any(!is.na(labels))) {
+        stop("cellTypeCol '", cellTypeCol,
+            "' has no non-missing values")
+    }
+    nNodes <- nrow(S4Vectors::metadata(sce)[[somCodesName]])
+    clusterId <- suppressWarnings(as.integer(as.character(cd$cluster_id)))
+    ok <- !is.na(labels) & !is.na(clusterId) &
+        clusterId >= 1L & clusterId <= nNodes
+    out <- data.frame(
+        id = seq_len(nNodes),
+        purity = rep(NA_real_, nNodes),
+        cell_type_majority = rep(NA_character_, nNodes),
+        stringsAsFactors = FALSE
+    )
+    if (!any(ok)) {
+        return(out)
+    }
+    tab <- table(labels[ok], factor(clusterId[ok], levels = seq_len(nNodes)))
+    totals <- colSums(tab)
+    known <- which(totals > 0)
+    if (length(known) == 0L) {
+        return(out)
+    }
+    majors <- apply(tab, 2, which.max)
+    out$purity[known] <- unname(vapply(known, function(j) max(tab[, j]) /
+        totals[j], numeric(1)))
+    # table() sorts labels alphabetically, so which.max takes the
+    # alphabetically first of the most frequent labels on a tie.
+    out$cell_type_majority[known] <- unname(rownames(tab)[majors[known]])
+    out
+}
+
+#' Copy the Known Labels into a Subsample
+#'
+#' Makes sure the subsample carries the per-cell label column. A subsample
+#' already holding the column is returned unchanged; one with an \code{id}
+#' colData column indexing the full object gets the labels copied in by
+#' index; otherwise the subsample is redrawn from the full object so the
+#' labels ride along in its colData.
+#'
+#' @param sub Subsampled \code{SingleCellExperiment}, or \code{NULL}.
+#' @param sce The full \code{SingleCellExperiment}.
+#' @param cellTypeCol Name of the known cell type column, or \code{NULL}.
+#' @param total Approximate total number of cells for the redraw fallback.
+#' @param somCodesName Name of the SOM codes metadata slot.
+#' @param seed Seed used only by the redraw fallback.
+#'
+#' @return The subsample with the label column present (or \code{sub}
+#'   unchanged when \code{cellTypeCol} is \code{NULL}).
+#'
+#' @keywords internal
+.mergeLabelsIntoSubsample <- function(sub, sce, cellTypeCol, total,
+    somCodesName, seed = 123) {
+    if (is.null(cellTypeCol) || is.null(sub)) {
+        return(sub)
+    }
+    if (cellTypeCol %in% colnames(SingleCellExperiment::colData(sub))) {
+        return(sub)
+    }
+    subId <- SingleCellExperiment::colData(sub)$id
+    if (!is.null(subId) && !anyNA(subId) && is.numeric(subId) &&
+        all(subId >= 1L) && all(subId <= ncol(sce))) {
+        SingleCellExperiment::colData(sub)[[cellTypeCol]] <-
+            as.character(
+                SingleCellExperiment::colData(sce)[[cellTypeCol]])[subId]
+        return(sub)
+    }
+    # The cached subsample predates the label column and carries no id that
+    # indexes the full object: redraw it so the labels travel in colData.
+    withr::with_seed(seed, .subsampleSce(sce, total, somCodesName))
 }
 
 #' Restore the Assay of a Subsampled SCE Saved Without Assays
