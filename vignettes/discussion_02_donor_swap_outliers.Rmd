@@ -1,0 +1,181 @@
+---
+title: "Donors 4 and 5: a real technical discontinuity, but probably not 'donor outliers'"
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE)
+```
+
+## The observation
+
+Working through the case study, donors 4 and 5 seemed to account for most of
+the clustering problems, prompting the idea of flagging them as sample-level
+outliers to exclude or down-weight. That instinct is reasonable, and there
+*is* a real, already-quantified technical effect sitting exactly at the
+donor-4/donor-5 boundary -- but it is not a property of donor 4 or donor 5
+individually. It is a reagent/instrument change that splits the cohort into
+two groups, **donors 1-4 vs. donors 5-7**, and donor 4 and donor 5 are simply
+the two donors adjacent to that split.
+
+## The mechanism: the CCR7/HELIOS fluorophore swap
+
+The Zenodo dataset's own documentation states that CCR7 and HELIOS were
+measured on swapped fluorophores for donors 5-7 relative to donors 1-4.
+`spectral_flow_case_detailed_study.Rmd` verifies this directly on the raw FCS
+`$PnS` descriptions (section "The CCR7/HELIOS swap") rather than taking the
+record's word for it:
+
+- Donors 1-4: CCR7 is on **Alexa Fluor 700**.
+- Donors 5-7: CCR7 is on **Alexa Fluor 488**.
+
+Reading every file by its `desc` field instead of the physical channel name
+fixes the *labelling* mismatch, but a fluorophore swap can still change the
+marker's measured brightness, dynamic range and spillover profile -- and the
+vignette finds that it does:
+
+- The between-donor SD of within-population CCR7 means is the single largest
+  in the entire marker x population matrix, and it is elevated **in every
+  population**, not just one -- a channel-wide signature, not a
+  population-specific or donor-specific one (section "Are the donor offsets
+  technical or compositional?").
+- It is largest specifically in the **naive CD4+/CD8+ T-cell subsets**, which
+  are gated CCR7-positive -- so the shift is happening *inside* an
+  already-CCR7+ population, which composition differences between donors
+  cannot explain.
+- Grouping naive-subset CCR7 means by fluorophore (AF700 for donors 1-4 vs.
+  AF488 for donors 5-7) rather than by donor shows the two fluorophore groups
+  separating cleanly, which is the direct check that the effect tracks the
+  swap and not donor-to-donor biology.
+
+This is a **channel-level batch effect with a hard boundary between donor 4
+and donor 5**, not a composition difference and not (necessarily) a
+donor-quality problem. Framing it as "donor 4 and 5 are bad samples" risks
+two mistakes: (a) it misses that donors 6 and 7 carry the same technical
+offset and would be just as affected if the panel leaned more on CCR7, and
+(b) it invites the wrong fix (down-weighting or excluding two donors) when
+the right fix is channel-specific.
+
+## An important correction to this story: CCR7 doesn't actually drive cell-level mis-routing
+
+Before proposing a CCR7-specific fix, the detailed study's own cell-level
+diagnostic ("A blind spot in eta^2" / the marker-pull-contamination analysis)
+has to be weighed against the donor-offset story above, because it points the
+other way for *this specific question*. That diagnostic finds the **wrong**
+centroid pull for genuinely misassigned cells is dominated by **CD56** and
+**CD8**, both markers with no connection to the fluorophore swap, while
+**CCR7's contribution to mis-routing is negative** -- on the cells it is
+measured on, CCR7 pulls them *towards* their own population's centroid, not
+away from it. In other words: CCR7 carries the largest *between-donor*
+technical offset (inflating `ari_donor`, i.e. donor leakage, and the
+cluster-ambiguity ratio for cells near a node boundary that CCR7 helps define)
+without being a major cause of cells landing in the *wrong population*.
+
+So the accurate framing is narrower than "the CCR7 swap is why donor 4/5
+clustering is poor": it is "the CCR7 swap is why donors 5-7 look like a
+different batch (donor leakage), which is a real and fixable thing, but it is
+probably not the dominant driver of the population-level mis-clustering that
+made donors 4/5 stand out subjectively." If a per-donor ARI breakdown (sketch
+below) does *not* show donors 4/5 or the 5-7 group clearly worse than 1-4, that
+is consistent with this nuance and means the original "donors 4/5 cause most
+of the problems" impression likely has a different cause -- worth checking
+against CD56/CD8-driven confusions (naive vs. TEMRA, or NK vs. NKT-like, per
+the "pull" contingency table in the detailed study) instead of the swap.
+
+## Why the "obvious" fixes already tested don't work, and what would
+
+The detailed-study factorial already tried the general-purpose tools for
+exactly this kind of problem and they underperform here:
+
+- **Per-donor centering/scaling** (`donor_median`, `donor_z`, and the
+  label-free `cyet_donor` cofactor strategy) all raise `ari_donor` *above* the
+  donor-composition floor and *lower* ARI (hypothesis H2, rejected in the
+  verdict table). These tools assume donor offsets are technical everywhere,
+  but the within-population SD heatmap shows the technical component is
+  concentrated almost entirely in CCR7 (and, to a lesser, more ambiguous
+  extent, CD56 in the TEMRA compartment, which reads more like real biological
+  donor-to-donor variability amplified by a dim marker than a technical
+  effect). Correcting every marker per-donor removes real population
+  composition signal along with the one channel that actually needs it.
+- **cyCombine** (donor = batch) sits at or below the composition floor and
+  is "neither clearly harmful nor helpful" (hypothesis H4) -- consistent with
+  the same over-correction risk: it equalizes donors globally rather than
+  targeting the one swapped channel.
+
+The targeted alternative that has **not** yet been tried in the factorial:
+correct or exclude **CCR7 specifically**, rather than correcting donors or
+all markers. Two concrete versions, in increasing order of effort:
+
+1. **Exclude CCR7 from the unsupervised SOM features** (the same move
+   already made for CD45, and for the same kind of reason: a marker whose
+   batch-dependent behaviour outweighs its remaining discriminative value for
+   this feature set) and check whether ARI and donor leakage both improve.
+   This is a single-line change to `type_m` in the existing script and reuses
+   the whole run engine as-is.
+2. **A per-fluorophore-group (not per-donor) linear correction on CCR7
+   only**: fit the offset between the two naive-subset group means (already
+   computed in the diagnostics section) and subtract it from the AF488 group
+   (donors 5-7) before the cofactor transform, leaving every other marker and
+   every other donor untouched. This targets exactly the effect that was
+   found, rather than a donor- or marker-wide proxy for it.
+
+## A concrete, cheap check before doing either
+
+Before spending a run on either fix, the factorial's existing cached outputs
+already support a sharper version of the original observation. If donors 4
+and 5 are driving the clustering problems *because of* the CCR7 swap boundary,
+donor-level ARI contributions should jump at the 4/5 boundary specifically for
+runs that keep CCR7 in the SOM features, and should flatten out for runs
+(like the CD45-exclusion precedent, or a CCR7-exclusion run per point 1 above)
+that drop it. That is a `table(donor, correct)` cut of the existing per-cell
+node/population vectors already computed inside the main vignette (`donor`,
+`pop`, `node`, `mc` are all in scope there) -- cheap to add as one more
+diagnostic table in `spectral_flow_case_detailed_study.Rmd`'s "Donor leakage"
+section, and worth doing before committing to either fix above:
+
+```r
+## sketch -- run inside spectral_flow_case_detailed_study.Rmd's environment,
+## after the anchor run (paper cofactor, no batch/scaling, Euclidean) has
+## produced `node` and `mc`:
+per_donor_ari <- sapply(split(seq_along(donor), donor), function(i)
+    mclust::adjustedRandIndex(mc[i], pop[i]))
+per_donor_ari[paste0("donor", 1:7)]
+```
+
+If donors 4 and 5 (or the whole 5-7 group) are genuinely worse by a margin
+larger than the stage-2 noise band, that confirms the CCR7-swap story
+quantitatively rather than impressionistically, and the per-fluorophore-group
+correction (option 2 above) becomes the natural next experiment to add as a
+new `scaling`-like factor level in the existing engine.
+
+## Bottom line
+
+- There is a real, verified, channel-specific technical discontinuity at
+  exactly the donor-4/donor-5 boundary (the CCR7/HELIOS fluorophore swap), and
+  it does inflate donor leakage (`ari_donor`) and node-boundary ambiguity.
+- It is a property of the **CCR7 channel in donors 5-7**, not of donors 4 or
+  5 as samples -- treat it as a per-channel correction problem, not a
+  per-donor outlier-flagging problem.
+- It is probably **not** the main cause of cells landing in the wrong
+  population outright -- the cell-level mis-routing diagnostic pins that on
+  CD56 and CD8, unrelated to the swap. Run the per-donor ARI check below
+  before assuming the swap explains the "donors 4/5 look worst" impression.
+- General-purpose donor-correction tools (per-donor centering, cyCombine)
+  have already been tested and shown to hurt more than they help, because
+  they spread the correction across markers and donors that don't need it.
+- The next concrete steps, in order: (1) the per-donor ARI breakdown below,
+  to confirm or disconfirm that donors 4/5 (or the 5-7 group) are actually
+  worse once you look past the subjective impression; (2) if the swap is
+  implicated, a targeted CCR7-only correction/exclusion rather than a
+  donor-wide one; (3) if CD56/CD8 confusions dominate instead, look at the
+  naive/TEMRA and NK/NKT-like continuum pairs the pull-contingency table
+  flags, which is a biology/metaclustering question, not a donor-QC one.

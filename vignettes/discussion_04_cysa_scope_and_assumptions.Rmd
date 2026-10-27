@@ -1,0 +1,182 @@
+---
+title: "What CySA is for: questions it can answer, and the assumptions behind it"
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE)
+```
+
+## What CySA actually is
+
+CySA is an **interactive Shiny dashboard for exploring and annotating an
+already-clustered** `SingleCellExperiment`, extracted from the `CyDa`
+project into a standalone package (`local/CLAUDE.md`). The operative word is
+*already*: `clusterSelector()` takes a SOM/metaclustering that was run
+upstream (FlowSOM codes in `metadata(sce)$SOM_codes`, a dendrogram over those
+codes, cluster/metacluster ids already attached to the cells) and gives a
+human a set of linked views for interrogating, merging, relabelling, and
+testing that result. CySA does **not** do transformation, batch correction,
+or clustering itself -- those are CyEt's and the upstream CATALYST/FlowSOM
+pipeline's job (see `vignettes/catalyst_workflow.Rmd`, which documents the
+reference CATALYST pipeline that CySA's panels reproduce interactively).
+
+Reading `R/CySA-package.R`, `R/clusterSelector.R`,
+`R/interface_diagnostics.R`, `R/server-reactives-diagnostics.R` and
+`R/plot-diagnostics.R` end to end, the app is organised around four linked
+jobs:
+
+1. **Navigate and merge a SOM/metacluster hierarchy** -- a dendrogram over
+   the SOM code vectors, a collapsible tree, and an `outputList` (a named
+   list of cluster groupings the user builds up interactively) that lets
+   a human collapse 100 SOM nodes into biologically meaningful groups and
+   give them names, rather than being stuck with whatever `k` the automatic
+   consensus step chose.
+2. **Visualize what's inside a selection** -- 2D marker scatter plots, SOM
+   raster heatmaps, tSNE/UMAP/PCA embeddings, violin/ridge plots of marker
+   distributions per cluster (including a ridge-*trace* variant for
+   following cells across an ordering), and an UpSet-style view of cluster
+   overlaps.
+3. **Diagnose whether the clustering/data can be trusted** (the
+   "Sample diagnostics" box, `R/interface_diagnostics.R`):
+   - **Sample MDS** -- pseudobulk multidimensional scaling across samples,
+     CySA's equivalent of `CATALYST::pbMDS()`: are samples clustering by a
+     biological grouping variable, or by batch/processing date?
+   - **Expression heatmap** -- per-sample marker medians, `plotExprHeatmap()`
+     equivalent: a compact look for obvious outlier samples or channels.
+   - **Marker NRS** (non-redundancy score) -- `plotNRS()` equivalent: which
+     markers actually carry the information behind the clustering, as
+     opposed to being redundant with others already used.
+   - **Cluster ambiguity** -- the own/rival SOM-node-distance-ratio
+     diagnostic discussed at length in
+     `discussion_03_label_free_mismatch_detection.Rmd`. Notably, rivals are
+     computed against the **full** SOM codebook, not just the currently
+     selected clusters (`.buildDiagnosticsReactives()`, `R/server-reactives-
+     diagnostics.R`), specifically so that a selected cluster's ambiguity
+     against an *unselected* node is not hidden.
+4. **Test a hypothesis about the annotated groups** -- a `diffcyt` GLMM/LMM
+   front end (`R/interface_diagnostics.R`'s `.buildDiffTestBox()`) for
+   differential abundance (DA, does a cell population's *frequency* differ
+   between groups) and differential state (DS, does a marker's *level within*
+   a population differ between groups), run on the user's own named/merged
+   cluster groups rather than on raw SOM nodes -- i.e. CySA lets the human
+   annotation step feed directly into the statistical test, instead of
+   testing on an arbitrary machine-chosen partition.
+
+An **ordered cluster heatmap** (dendrogram-ordered marker x cluster matrix
+with a cell-count bar, `CATALYST::plotMultiHeatmap(bars = TRUE)`'s
+equivalent) ties 1 and 2 together: it is the view for deciding, with the
+actual marker profile in front of you, whether two dendrogram-adjacent SOM
+nodes are the same cell type (merge them in `outputList`) or genuinely
+different (keep them separate).
+
+## Which biological and bioinformatics questions this is built to answer
+
+Given that structure, CySA is purpose-built for the questions that come
+*after* a first-pass clustering exists, not for discovering the clustering
+itself:
+
+- **"What is this cluster, biologically?"** -- ridge plots + ordered heatmap
+  let a human read off the marker profile of a SOM node/metacluster and
+  assign a cell-type name, the task `clusterSelector()`'s `outputList` and
+  naming UI exist for.
+- **"Is my automatic metaclustering too coarse or too fine?"** -- the
+  dendrogram/collapsible-tree navigation over SOM codes lets a human
+  override FlowSOM's automatic `k`, directly addressing the meta-clustering
+  sensitivity problem discussed in `discussion_01_clustering_ceiling.Rmd`
+  and `discussion_03_label_free_mismatch_detection.Rmd` where the *wrong*
+  level of granularity, not the preprocessing, is responsible for apparent
+  clustering failures.
+- **"Is a cluster boundary biologically real or an artefact of where FlowSOM
+  happened to draw a node edge?"** -- the cluster-ambiguity diagnostic.
+- **"Is this difference in population frequency/marker state between my
+  experimental groups real?"** -- the diffcyt DA/DS panel, which also
+  enforces the diffcyt-specific statistical requirements (non-overlapping
+  groups; a random effect for DA; *not* `sample_id` as a DS random effect,
+  explicitly warned against in the UI copy because it silently returns NA
+  p-values -- `R/interface_diagnostics.R` lines ~155-163).
+- **"Are my samples comparable, or is one of them a technical outlier before
+  I even look at clusters?"** -- sample MDS + expression heatmap, the direct
+  tool for catching something like the CCR7/HELIOS fluorophore-swap
+  discontinuity discussed in `discussion_02_donor_swap_outliers.Rmd` *before*
+  it shows up as confusing cluster-level ARI differences.
+
+## Assumptions -- which are necessary, which are just convenient, which are risky
+
+**Necessary (the app cannot function without them):**
+
+- A SOM/metaclustering (code vectors, dendrogram, per-cell cluster id) already
+  exists in `metadata(sce)` / `colData(sce)` before `clusterSelector()` is
+  called -- CySA explores and re-labels a partition, it does not compute one.
+- The experiment design needed for diffcyt (a factor column to test, and a
+  sensible random-effect column) exists in `experiment_info` -- the DA/DS
+  panel cannot construct a sound model otherwise, and the UI's own warning
+  about `sample_id` as a DS random effect shows this is a known, real failure
+  mode when the assumption silently doesn't hold.
+
+**Convenient, and worth flagging as package debt (per `local/CLAUDE.md`'s
+"Known hazards" section, which already lists most of these):**
+
+- `ggthemr` (archived on CRAN) is imported for theming -- a packaging risk,
+  not an analysis-correctness one.
+- `raster::rasterFromXYZ()`/`raster::brick()` dependency for the SOM raster
+  view -- the package currently receives a pre-built raster object from the
+  caller rather than building it internally, so the dependency is only
+  partially exercised.
+- Broad `@import` of whole packages (rather than targeted `@importFrom`)
+  produces namespace-masking warnings under `R CMD check` -- a code-quality
+  issue, not a scientific one.
+
+**Risky if not checked per-dataset (these are where a wrong assumption would
+produce a wrong biological conclusion, not just a package-hygiene warning):**
+
+- **The cluster-ambiguity threshold (0.9 in the detailed study) is not
+  universal** -- see the caveats in
+  `discussion_03_label_free_mismatch_detection.Rmd`. Using it unexamined on a
+  new panel risks over- or under-flagging ambiguous cells.
+- **diffcyt's DA model (GLMM, typically negative-binomial counts) and DS model
+  (LMM on per-cluster-sample medians) both assume enough samples per group for
+  the random-effect variance to be estimable.** CySA enforces the
+  *mechanical* constraints (non-overlapping groups, a random effect present
+  for DA) but not statistical power -- a DA/DS test run on too few samples per
+  group will still run and produce a (likely non-significant, or unstable)
+  result without the UI warning that the design is underpowered.
+- **The ordered heatmap and ridge-plot-based manual annotation assume a human
+  reading marker profiles can correctly judge whether two adjacent SOM nodes
+  are "the same cell type."** This is exactly the assumption that breaks down
+  on a genuine biological continuum (CD4/CD8 maturation states, per
+  `discussion_01_clustering_ceiling.Rmd`): a human merging/splitting nodes by
+  eye on a continuum is making the same kind of threshold call the original
+  manual gating made, with the same non-uniqueness, just moved into CySA's UI
+  instead of a gating tree. CySA makes this decision point visible and
+  reviewable, but it does not remove the underlying non-identifiability.
+- **Sample MDS / expression heatmap / NRS are diagnostic, not corrective** --
+  they can show you donors 5-7 separating from 1-4 on CCR7, but CySA itself
+  has no transformation or batch-correction step to act on that finding; the
+  fix has to happen upstream (CyEt) and the corrected data re-loaded.
+
+## How this connects back to the open questions
+
+- The meta-clustering vs. preprocessing question
+  (`discussion_01_clustering_ceiling.Rmd`) is precisely the problem CySA's
+  dendrogram/collapsible-tree re-merging UI exists to let a human correct
+  interactively, rather than something a better transformation can fix.
+- The donor-4/5 question (`discussion_02_donor_swap_outliers.Rmd`) is
+  precisely what the Sample MDS / expression heatmap diagnostics are for --
+  catching a technical discontinuity *before* trusting cluster-level
+  conclusions, independent of whether the true cause turns out to be CCR7 or
+  something else entirely.
+- The label-free mismatch question
+  (`discussion_03_label_free_mismatch_detection.Rmd`) is CySA's existing
+  cluster-ambiguity diagnostic, validated against ground truth on the Zenodo
+  case study specifically so it can be trusted (with the stated caveats) on
+  data where no ground truth exists, such as MIv1.

@@ -1,0 +1,132 @@
+---
+title: "Why isn't the clustering 100% right? (and what 'right' should mean here)"
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE)
+out_dir <- "spectral_analysis"
+```
+
+## The question
+
+Working through `spectral_flow_case_detailed_study.Rmd`, the manual/paper
+transformation clearly does best, and the null (negative) population is not
+split the way it is for most alternative pipelines. Even so, the best
+label-free ARI anywhere in that factorial is **~0.85**, with a measured
+seed-to-seed noise band of **0.0445** and a donor-composition floor of
+**0.0542** (`spectral_analysis/00_config_v2.rds`). The intuitive expectation
+-- "if the transformation is right, clustering should recover the 8 manually
+gated populations almost perfectly" -- is not supported by anything in the
+factorial, and this document explains why that expectation is the wrong
+target, using evidence already computed in that vignette rather than new
+claims.
+
+## Three separate reasons ARI is capped well below 1, stacked on top of each other
+
+### 1. The "ground truth" is itself a hard cut on a continuum, not 8 separable clouds
+
+The 8 manually-gated populations in this dataset are not 8 equally-discrete
+clusters. Naive/TEMRA/effector-memory CD4+ and CD8+ T-cell subsets are gated
+by thresholding two continuous markers, CCR7 and CD45RA, along a
+differentiation trajectory -- there is no gap in the data at the gate, only a
+human-drawn line. FlowSOM has no way to "know" where that line was drawn; it
+places node boundaries where the *density* has saddle points, and on a
+continuum those saddle points need not coincide with the manual threshold.
+
+`spectral_flow_case_detailed_study.Rmd`'s own `k8_table` diagnostic (the
+contingency table of metaclusters vs. populations at `k` = 8, the *true*
+number of labels) shows this directly: dropping from `k` = 12 to the
+"correct" `k` = 8 *lowers* ARI, because the consensus step is forced to merge
+some of the continuum subsets in ways that don't track the manual gate. This
+is a statement about the labels and the metaclustering step, not about
+preprocessing quality -- see that vignette's section "Why does `k` = 8 hurt?".
+A clustering method being unable to reconstruct an arbitrary threshold on a
+continuum is not evidence that the transformation, the SOM, or CySA failed.
+
+### 2. There is a measured noise floor, and it is not small
+
+Two mathematically identical runs (`none` vs. `center_global` scaling, which
+cannot change Euclidean/Manhattan/Chebyshev distances) disagree in ARI purely
+because `FlowSOM::SOM()`'s stochastic training and `metaClustering_consensus()`
+amplify tiny floating-point differences. The measured size of that
+disagreement -- the `noise_band`, 0.0445 -- is almost as large as the gap
+between the best and median pipelines in the whole factorial. Any comparison,
+including an informal "does this look like 100%" comparison, has to be read
+against this floor. An ARI of 0.85 sitting inside a regime where identical
+runs already differ by 0.04-0.05 is a *ceiling* result, not a partial failure.
+
+### 3. Variance decomposition shows the remaining gap is a metaclustering problem, not a preprocessing problem
+
+This is the most direct answer to "why are ambiguous/in-between cells still
+lost even with a good transformation": `ari_node_majority` (the ARI you would
+get if every SOM node were labelled by its own majority population, which
+does not depend on the consensus metaclustering step at all) stays almost flat
+across the stage-2 finalists while the headline `ari` varies between them. In
+other words, **the SOM itself is already placing cells into nodes about as
+well as it is going to**; what moves the final ARI up or down between
+otherwise-similar pipelines is whether FlowSOM's consensus clustering happens
+to merge the right pair of SOM nodes into one metacluster or not. That is a
+coin that preprocessing barely weights.
+
+```{r node-majority-vs-ari, fig.width = 7, fig.height = 4.5}
+if (file.exists(file.path(out_dir, "13_stage2_summary_v2.rds"))) {
+    s2 <- readRDS(file.path(out_dir, "13_stage2_summary_v2.rds"))
+    plot(s2$node_majority_mean, s2$ari_mean,
+         xlab = "ari_node_majority (SOM quality, no metaclustering)",
+         ylab = "ari_mean (final, after consensus metaclustering)",
+         main = "Spread in final ARI is mostly a metaclustering effect",
+         pch = 19, col = ifelse(s2$weighting == "none", "#264653", "#dc3545"))
+    legend("bottomright", legend = c("label-free", "oracle"),
+           col = c("#264653", "#dc3545"), pch = 19, bty = "n")
+}
+```
+
+If `node_majority_mean` clusters in a narrow band while `ari_mean` fans out
+vertically, that is the factorial's own evidence that the "soo poor" feeling
+is coming from the merge/split behaviour of consensus clustering on 100 SOM
+nodes, not from anything upstream of it.
+
+## What this means for "ambiguous" / in-between cells specifically
+
+Cells with a high own/rival distance ratio (CySA's cluster-ambiguity
+diagnostic, generalised in the detailed study's `ambiguity()` helper) are, by
+construction, cells sitting near a SOM node boundary. Given point 1 above,
+many of these are genuinely on a biological continuum (CCR7/CD45RA
+transitional memory states being the clearest case in this panel) rather than
+misplaced due to a transformation defect. **Removing** them, or hoping a
+better cofactor will make them "resolve," treats a continuum as if it were a
+measurement artifact. The useful question is not "why hasn't preprocessing
+eliminated these cells" but "which of these cells are ambiguous *because the
+biology is genuinely intermediate* vs. ambiguous *because of a technical
+problem specific to a subset of samples*" -- which is exactly the question
+taken up in `discussion_02_donor_swap_outliers.Rmd` (the CCR7/HELIOS swap, a
+real technical discontinuity) and `discussion_03_label_free_mismatch_detection.Rmd`
+(telling the two apart without the labels).
+
+## Practical takeaway for the case-study vignettes
+
+- Treat **0.85 ARI at the measured noise band, with `k` tuned to the data's
+  own cluster structure rather than to the label count**, as the realistic
+  ceiling for this dataset and panel, not 1.0.
+- When reporting "poor clustering" for a specific analysis, first check
+  `ari_node_majority` against `ari` for that run. If they move together, the
+  issue is upstream (transformation/features); if `ari_node_majority` is fine
+  and only `ari` is low, the issue is the metaclustering step (wrong `k`,
+  unlucky consensus merge), and re-running `metaClustering_consensus()` with a
+  different seed or `k` is the first thing to try, not re-tuning the
+  transformation again.
+- `spectral_flow_case_detailed_study.Rmd` already is, in effect, the
+  "transformation/scaling/batch-correction comparison" vignette the overall
+  project needs as a separate deliverable from the biology-focused case
+  study -- see the note in `discussion_04_cysa_scope_and_assumptions.Rmd` about
+  keeping that split rather than re-splitting further.

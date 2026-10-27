@@ -1,0 +1,137 @@
+---
+title: "Finding likely-mis-clustered cells without knowing the truth"
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE)
+```
+
+## The question
+
+On real (MIv1-style) data there is no `known_population` column -- the whole
+point of exploring with CySA is to find the populations, not check them. Three
+versions of the same underlying question came up:
+
+1. Is "clustering is poor even for in-between cells" a **meta-clustering**
+   problem (i.e. a FlowSOM-consensus-step problem) rather than a clustering
+   problem?
+2. Can CySA **describe** the result in a way that's useful even when the
+   clustering is imperfect?
+3. Can we identify cells that are **likely wrongly clustered**, without
+   knowing which cluster they "should" be in?
+
+All three have direct, already-validated answers from the Zenodo case study,
+because that dataset is the one place in this project where the "truth" is
+available to check an unsupervised diagnostic against.
+
+## 1. Yes, this is substantially a meta-clustering problem -- and it's checkable without labels
+
+`discussion_01_clustering_ceiling.Rmd` shows `ari_node_majority` (no
+dependence on the consensus-metaclustering step) staying flat while the
+labelled `ari` varies across otherwise-similar pipelines. The label-free
+version of the same check is **`pct_mapping_agree`** and, more usefully,
+simply re-running `FlowSOM::metaClustering_consensus()` at a different seed or
+`k` on the *same* trained SOM codes and comparing the two resulting
+metaclusterings to each other (not to any ground truth). If two metaclustering
+runs on the same SOM disagree about which nodes merge, that disagreement *is*
+the meta-clustering instability, directly observable with no labels at all.
+This is a cheap, generic diagnostic worth adding wherever FlowSOM is used on
+unlabeled data: run `metaClustering_consensus()` twice (different seed), and
+report the ARI *between the two runs* as a built-in confidence statement
+about the metaclustering step, parallel to how the detailed study uses twin
+runs to measure training noise.
+
+## 2. CySA's existing cluster-ambiguity diagnostic is the general, label-free tool for "which cells are I unsure about"
+
+CySA's "Cluster ambiguity" tab (`R/interface_diagnostics.R`,
+`R/plot-diagnostics.R`) and the detailed study's `ambiguity()` helper compute,
+for every cell: its distance to the SOM code vector of the node it was
+assigned to (`own`) versus its distance to the nearest *other* node's code
+vector (`rival`). The ratio `own/rival` is <= 1 for a cell cleanly inside its
+node's territory, and close to 1 for a cell sitting on a node boundary. This
+requires **no labels** -- it is purely a property of the trained SOM and the
+cell's own marker values.
+
+The Zenodo case study is the place this gets validated, because there the
+`own/rival` flag can be checked against `known_population`:
+
+- Cells flagged as ambiguous overlap strongly with cells that sit between two
+  SOM nodes whose majority populations differ (i.e. true borderline cells),
+  rather than being scattered randomly across clearly-separated populations
+  -- the correlation the "Accuracy vs. ambiguity" section of the detailed
+  study reports between `node_purity` and `pct_ambiguous` is the aggregate
+  version of this check.
+- The marker-pull-contamination analysis (misassigned cells closer to a
+  *wrong* centroid than their own) is a second, independent, **also
+  label-using** way of finding at-risk cells, but it agrees with the
+  ambiguity ratio on which markers matter (CD56, CD8 -- see
+  `discussion_02_donor_swap_outliers.Rmd`), which is the cross-check that
+  gives confidence the label-free `own/rival` ratio is measuring something
+  real and not an artefact of the SOM's geometry.
+
+**Practical recipe for unlabeled data** (directly transferable to MIv1/CyEt
+analyses): compute `own/rival` for every cell against the trained SOM codes,
+flag cells above a threshold (0.9 in the detailed study; re-derive the
+threshold per-dataset rather than reusing 0.9 blindly -- see caveats below),
+and treat the flagged set as "candidates for manual review / a biologically
+real intermediate state / technical noise," to be adjudicated with the
+ridge-plot and ordered-heatmap views CySA already provides for exactly that
+kind of per-cluster, per-marker inspection.
+
+## 3. Describing the result when the clustering is imperfect: don't force a single hard partition onto biology that is a continuum
+
+The honest description of a clustering result with a known ceiling (noise
+band + composition floor + metaclustering instability, as established in
+`discussion_01_clustering_ceiling.Rmd`) is not a single ARI number but a
+small set of complementary views, all of which CySA already supports and
+which together answer "how much do I trust this partition, and where":
+
+| Question | CySA view |
+|---|---|
+| Are node boundaries crisp or is this a continuum? | Cluster-ambiguity diagnostic (`own/rival`) |
+| Is a cluster split/merge driven by batch rather than biology? | Sample MDS, expression heatmap, marker NRS |
+| Which markers actually distinguish two candidate clusters I'm unsure about merging? | Ridge plots per marker, ordered cluster heatmap |
+| Does a population difference between groups survive statistically? | diffcyt DA/DS tests on the user's own saved cluster groups |
+
+None of these requires ground truth. The role of the Zenodo case study is to
+calibrate *how much to trust* the ambiguity diagnostic specifically, by
+showing it agrees with label-based misassignment evidence on the one dataset
+where that check is possible -- which is exactly what section 2 above does.
+
+## Caveats on using `own/rival` ambiguity as a general-purpose, label-free flag
+
+- **The 0.9 threshold is dataset-specific.** It was chosen for this panel's
+  own SOM grid and distance function; recalibrate per dataset (e.g. by
+  looking at the distribution's shape -- a bimodal own/rival distribution has
+  a natural cut point, a unimodal one does not and the threshold is then
+  arbitrary).
+- **Ambiguity cannot distinguish "real continuum" from "technical noise."**
+  Both produce a high own/rival ratio. The CCR7/HELIOS-swap discussion
+  (`discussion_02_donor_swap_outliers.Rmd`) is a reminder that a boundary
+  effect can come from a batch issue in a specific marker/sample subset
+  rather than biology; cross-referencing ambiguous cells against sample/donor
+  metadata (are flagged cells concentrated in specific samples?) is the
+  practical way to tell the two apart without labels.
+- **A nearest-centroid-style distance decomposition (the marker-pull
+  analysis) needs labels or a provisional clustering to define "own" vs.
+  "wrong" centroids.** On unlabeled data the closest label-free analogue is:
+  take the *current* metacluster assignment as a provisional truth, compute
+  per-marker pull towards the nearest *other* metacluster's centroid for
+  cells with high ambiguity, and treat the result as a hypothesis about which
+  marker is driving the ambiguity for that specific group of cells -- useful
+  for deciding what to look at in CySA's ridge plots, not as a final answer.
+- **Non-Euclidean SOM distances (Manhattan, Chebyshev, cosine) change what
+  "ambiguous" means geometrically.** The detailed study flags this explicitly
+  (cosine ambiguity values "are not comparable with the others") -- don't
+  compare ambiguity rates across runs trained with different `distf` without
+  checking this first.

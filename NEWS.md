@@ -30,6 +30,57 @@
   genuine instability found in CyEt's own search for CD45 specifically (two
   different local optima depending on the tested cofactor range). Added
   `CyEt` to `Suggests`.
+- `spectral_flow_case_study.Rmd` now also runs CyEt at the granularity it
+  is meant to be used at -- per donor *and* per marker (168
+  `optimizeBvalueVector()` calls, 6,000-cell-per-donor subsample, cached in
+  `vignettes/support/cyet/cyet_per_donor_resolved.rds`) -- rather than
+  pooling all donors into one subsample as the previous entry's comparison
+  did. This surfaces real donor-to-donor cofactor heterogeneity the pooled
+  run averaged away, and a second boundary artifact (GZMB, one donor) the
+  pooled run also hid.
+- `spectral_flow_case_study.Rmd` now tests the full three-step pipeline
+  this enables: transform each donor with its own per-donor/per-marker
+  CyEt cofactor, realign the donors with `cyCombine::batch_correct()`
+  (per-cell-state-group `ComBat`), then an explicit per-marker z-score,
+  all before FlowSOM, with cached results
+  (`vignettes/support/cycombine/cycombine_per_donor_compare.rds`). None of
+  the three steps helps: per-donor CyEt transformation alone drops ARI to
+  0.634 (worse than the pooled-CyEt result), cyCombine's realignment
+  recovers most but not all of that (0.823), and the z-score on top barely
+  changes it further (0.821) -- all well short of this vignette's simple
+  baseline of one shared per-marker cofactor with no correction (0.968).
+  `cyCombine` is a GitHub-only package (not on CRAN/Bioconductor), so
+  unlike `CyEt` it is deliberately **not** added to `Suggests`.
+- `spectral_flow_case_study.Rmd` now documents, with a reproducible
+  comparison (`vignettes/support/metaclustering/metaclustering_compare.rds`),
+  that `CATALYST::cluster()`'s SOM-building step (`FlowSOM::ReadInput()` +
+  `FlowSOM::BuildSOM()`) is genuinely FlowSOM's own code, while its
+  metaclustering step uses `ConsensusClusterPlus::ConsensusClusterPlus()`
+  rather than FlowSOM's own `metaClustering_consensus()` -- re-running
+  metaclustering with FlowSOM's own function on the identical SOM codes
+  gives ARI 0.977 vs. 0.968 for CATALYST's default, a real but small
+  difference between two distinct consensus-clustering implementations.
+- `spectral_flow_case_detailed_study.Rmd`'s `cyet_donor` cofactor set is
+  regenerated with `CyEt` 0.99.13 (up from 0.99.12), which added adaptive
+  range extension and explicit convergence status to
+  `optimizeBvalueVector()`; this fixed a boundary artifact on GZMB (one
+  donor) but left CD45 non-convergent on 5 of 7 donors, now resolved with
+  the new version's bimodality-aware `detect_bimodal_split()` instead of
+  an unconditional replace-with-global-median. CD45 is also now excluded
+  from this vignette's SOM clustering features (`type_m`) -- while
+  remaining in the cofactor/transform/batch-correction path -- because
+  these FCS files are already manually gated into CD45+ leukocyte
+  populations upstream, so CD45 has no negative population left to
+  discriminate (confirmed directly: raw-scale minimum 8,820 across
+  725,748 cells, zero CD45-negative cells) and its cofactor is for that
+  reason only weakly identifiable. Re-running the full factorial after
+  both changes shows per-donor CyEt remains, by a wide and stable margin,
+  the one cofactor strategy clearly worse than the paper-derived cofactors
+  (paired dARI -0.080, vs. -0.091 before either change) -- neither change
+  alters that conclusion. Excluding CD45 from clustering is a small net
+  cost in mean ARI across every cofactor strategy (`paper` 0.824 -> 0.803,
+  best flat 0.851 -> 0.845), not an improvement, and is kept for the
+  conceptual reason above rather than because it helps the numbers.
 
 ## Bug fixes
 

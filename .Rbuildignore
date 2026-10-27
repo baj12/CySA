@@ -45,3 +45,10 @@ CySA.proj
 ^vignettes/catalyst_workflow\.Rmd$
 ^vignettes/support$
 ^vignettes/spectral_flow_case_study\.Rmd$
+^vignettes/spectral_flow_case_detailed_study\.Rmd$
+^vignettes/discussion_01_clustering_ceiling\.Rmd$
+^vignettes/discussion_02_donor_swap_outliers\.Rmd$
+^vignettes/discussion_03_label_free_mismatch_detection\.Rmd$
+^vignettes/discussion_04_cysa_scope_and_assumptions\.Rmd$
+^vignettes/41598_2025_Article_12153\.pdf$
+^vignettes/41598_2025_12153_MOESM1_ESM\.docx$

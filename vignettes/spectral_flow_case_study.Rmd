@@ -27,10 +27,8 @@ ground truth to check the clustering against.
 
 The data are 56 FCS files (8 manually-gated immune populations x 7 healthy
 donors, 24-marker panel) acquired on a **Cytek Aurora, a 5-laser spectral
-flow cytometer** -- this is conventional fluorescence flow cytometry read
-across many spectral channels and unmixed, *not* mass cytometry (CyTOF),
-even though the marker-class vocabulary below ("type"/"state") follows the
-same convention CATALYST uses for CyTOF data. The samples are peripheral
+flow cytometer** -- this is fluorescence-based flow cytometry read across
+many spectral channels and unmixed. The samples are peripheral
 blood: lymphocytes Ficoll-isolated from whole blood drawn from 7 healthy,
 non-pregnant adult donors (de-identified discarded clinical material), per
 the dataset's own documentation on Zenodo, published openly there (DOI
@@ -41,8 +39,21 @@ naming in flow and mass cytometry with CytoPheno"*, Scientific Reports
 file (e.g. `"B_cells_donor1.fcs"`), which gives a hidden ground-truth label
 (`known_population`) for every cell -- the manual gating already done by the
 original authors. We hide this label from FlowSOM and only use it afterwards
-to score the unsupervised clustering (adjusted Rand index), and to annotate
-the CySA dashboard screenshots.
+to score the unsupervised clustering, and to annotate the CySA dashboard
+screenshots.
+
+Scoring uses the **adjusted Rand index (ARI)**, computed throughout this
+vignette with `mclust::adjustedRandIndex()`. The (unadjusted) Rand index is
+the fraction of all cell pairs on which two clusterings agree (both put the
+pair together, or both put it apart); the *adjustment* subtracts out the
+agreement expected from chance grouping alone, so a random, uninformative
+clustering scores ARI ~ 0 and a perfect match (up to arbitrary cluster
+relabelling) scores ARI = 1. Here the two clusterings being compared are
+always FlowSOM/CATALYST's unsupervised metaclusters (`meta12`, derived with
+no knowledge of the labels) and `known_population`, the manual-gating
+ground truth hidden from clustering -- so ARI is this vignette's single
+number for "how well did unsupervised clustering recover the known cell
+populations."
 
 The download is plain HTTPS with no login or API key (unlike FlowRepository,
 whose anonymous FCS download is gated behind an account), which is why this
@@ -112,6 +123,36 @@ every file by its FCS `$PnS` (antigen/description) field rather than by
 physical channel name sidesteps that, since the `desc` for a given antigen is
 consistent across all 56 files regardless of which physical channel it was
 measured on for a particular donor.
+
+This is verified directly against the raw files below, not just taken on the
+Zenodo record's word: for donors 1-4, physical channel `$P10` (Alexa
+Fluor 488-A) carries `$PnS = "HELIOS"` and `$P12` (Alexa Fluor 700-A)
+carries `"CCR7"`; for donors 5-7 those same two physical channels are
+swapped (`$P10` -> `"CCR7"`, `$P12` -> `"HELIOS"`). The `$PnS` value is what
+tracks the antigen correctly across that swap, confirming that matching on
+`desc` rather than channel name is both necessary and sufficient here.
+
+```{r verify-ccr7-helios-swap}
+check_desc <- function(fp) {
+    ff <- read.FCS(fp, transformation = FALSE, truncate_max_range = FALSE)
+    pd <- pData(parameters(ff))
+    keep <- as.character(pd$desc) %in% c("CCR7", "HELIOS")
+    data.frame(name = as.character(pd$name)[keep],
+        desc = as.character(pd$desc)[keep], stringsAsFactors = FALSE)
+}
+swap_check <- lapply(
+    c(donor1 = "spectral_fcs/B_cells_donor1.fcs",
+        donor5 = "spectral_fcs/B_cells_donor5.fcs"),
+    check_desc
+)
+swap_check
+stopifnot(
+    identical(swap_check$donor1$desc[swap_check$donor1$name == "Alexa Fluor 488-A"],
+        "HELIOS"),
+    identical(swap_check$donor5$desc[swap_check$donor5$name == "Alexa Fluor 488-A"],
+        "CCR7")
+)
+```
 
 ```{r common-markers}
 ## The 24 markers present with a non-NA $PnS description in every one of
@@ -208,6 +249,100 @@ sce_prepped <- sce  # kept un-clustered; reused later for the parameter sweep
 `known_population` is carried as a `colData` column but never passed to
 `cluster()` -- it is only used afterwards, to score the clustering.
 
+Before clustering, it is worth looking at the actual scale of what the SOM
+will see: the arcsinh-transformed (`exprs` assay) value range, mean, and SD
+for each of the 14 type markers that define the grid. A SOM trained on
+Euclidean distance implicitly treats a marker with a wider spread as more
+important, so a marker that is an outlier on scale alone is worth noticing
+before, not after, interpreting the clustering.
+
+```{r marker-ranges}
+type_m <- type_markers(sce)
+marker_ranges <- t(apply(assay(sce, "exprs")[type_m, ], 1, function(v) {
+    c(min = min(v), max = max(v), mean = mean(v), sd = sd(v))
+}))
+marker_ranges <- as.data.frame(round(marker_ranges, 2))
+marker_ranges[order(-marker_ranges$sd), ]
+```
+
+```{r marker-means, fig.width = 9, fig.height = 5}
+
+## Same marker order as the SD plot
+per_sample$marker <- factor(per_sample$marker, levels = levels(per_sample$marker))
+
+ggplot(per_sample, aes(x = marker, y = mean)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey90") +
+    geom_jitter(aes(colour = sample_id), width = 0.15, size = 2) +
+    labs(x = "Type marker", y = "Per-sample mean",
+        colour = "Sample",
+        title = "Per-sample mean of arcsinh-transformed expression") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+per_sample$mean_centered <- per_sample$mean -
+    ave(per_sample$mean, per_sample$marker)
+
+ggplot(per_sample, aes(x = marker, y = mean_centered, colour = sample_id)) +
+    geom_hline(yintercept = 0, linewidth = 0.3) +
+    geom_jitter(width = 0.15, size = 2) +
+    labs(x = "Type marker", y = "Per-sample mean minus marker's mean across donors",
+        colour = "Sample",
+        title = "Donor offsets in mean expression") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ex  <- assay(sce, "exprs")[type_m, ]
+pop <- factor(sce$known_population)
+
+marker_info <- t(apply(ex, 1, function(v) {
+    gm      <- tapply(v, pop, mean)
+    gn      <- as.numeric(table(pop))
+    between <- sum(gn * (gm - mean(v))^2) / length(v)
+    total   <- mean((v - mean(v))^2)
+    within  <- sum(tapply(v, pop, function(z) sum((z - mean(z))^2))) / length(v)
+    c(sd = sqrt(total), eta2 = between / total, within_sd = sqrt(within))
+}))
+marker_info <- as.data.frame(round(marker_info, 3))
+marker_info[order(-marker_info$eta2), ]
+
+ggplot(marker_info, aes(x = sd, y = eta2, label = rownames(marker_info))) +
+    geom_point() + ggrepel::geom_text_repel() +
+    labs(x = "Total SD (current SOM weight)",
+         y = "Fraction of variance explained by known population") +
+    theme_minimal()
+```
+
+
+The pooled numbers above can hide donor-to-donor differences in scale, which
+matter here because the SOM is trained on all seven donors pooled together
+without any per-donor correction. The boxplot below shows, for each marker,
+the spread of its per-sample SD across the 7 donors; a marker whose SD
+varies a lot from donor to donor (a tall box/whiskers) is one where a single
+donor's spread could disproportionately drive that marker's contribution to
+the pooled Euclidean distance.
+
+```{r marker-ranges-per-sample, fig.width = 9, fig.height = 5}
+exprs_m <- assay(sce, "exprs")[type_m, ]
+sample_vec <- sce$sample_id
+per_sample <- do.call(rbind, lapply(type_m, function(m) {
+    agg <- tapply(exprs_m[m, ], sample_vec, function(v) c(mean = mean(v), sd = sd(v)))
+    data.frame(marker = m, sample_id = names(agg),
+        mean = vapply(agg, `[`, numeric(1), "mean"),
+        sd = vapply(agg, `[`, numeric(1), "sd"))
+}))
+per_sample$marker <- factor(per_sample$marker,
+    levels = type_m[order(tapply(per_sample$sd, per_sample$marker, median),
+        decreasing = TRUE)])
+
+ggplot(per_sample, aes(x = marker, y = sd)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey90") +
+    geom_jitter(aes(colour = sample_id), width = 0.15, size = 2) +
+    labs(x = "Type marker", y = "Per-sample SD",
+        colour = "Sample",
+        title = "Per-sample SD of arcsinh-transformed expression") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
 ```{r cluster}
 set.seed(1234)
 sce <- cluster(sce, features = type_markers(sce),
@@ -219,17 +354,79 @@ meta12 <- cluster_ids(sce, "meta12")
 ari <- mclust::adjustedRandIndex(meta12, sce$known_population)
 cat("Adjusted Rand index (meta12 vs. known_population):",
     round(ari, 3), "\n")
-table(known = sce$known_population, meta12 = meta12)
+confusion <- table(known = sce$known_population, meta12 = meta12)
+confusion
+```
+
+```{r fig-confusion-heatmap, fig.width = 8, fig.height = 5}
+## Row-normalized (per known population) so each row sums to 1 -- this is
+## the more readable view when, as here, the known populations differ
+## hugely in cell count (e.g. far more T cells than NK cells).
+confusion_prop <- confusion / rowSums(confusion)
+confusion_df <- as.data.frame(confusion_prop)
+confusion_df$meta12 <- factor(confusion_df$meta12,
+    levels = as.character(sort(as.integer(unique(confusion_df$meta12)))))
+
+ggplot(confusion_df, aes(x = meta12, y = known, fill = Freq)) +
+    geom_tile(colour = "white") +
+    geom_text(aes(label = ifelse(Freq > 0.01, scales::percent(Freq, accuracy = 1), "")),
+        size = 3, colour = "black") +
+    scale_fill_viridis(name = "Fraction of\nknown population", limits = c(0, 1)) +
+    labs(x = "SOM metacluster (meta12)", y = "Known population",
+        title = "Known population vs. unsupervised metacluster assignment") +
+    theme_minimal() +
+    theme(panel.grid = element_blank())
 ```
 
 An ARI of `r round(ari, 2)` is a strong recovery for a fully unsupervised
 10x10 SOM run on real spectral data, using the paper's own per-marker
-cofactors: B cells and NK cells typically separate almost perfectly, while
-naive/effector-memory/TEMRA CD8 T-cell subsets still show some cross-cluster
-mixing in the confusion matrix above -- a real, biologically-expected
-differentiation continuum rather than a clustering failure. This is exactly
-the kind of structure the next section is built to show visually, cluster by
-cluster.
+cofactors: B cells and NK cells typically separate almost perfectly (each
+lands on one metacluster at or near 100%), while naive/effector-memory/TEMRA
+CD8 T-cell subsets still show some cross-cluster mixing in the heatmap
+above -- a real, biologically-expected differentiation continuum rather than
+a clustering failure. This is exactly the kind of structure the next
+section is built to show visually, cluster by cluster.
+
+### Is `cluster()`'s SOM actually FlowSOM?
+
+`cluster()` is a CATALYST function, which raises a fair question: is the SOM
+itself really FlowSOM, or a CATALYST reimplementation of it? Reading
+`cluster()`'s source settles the grid-building half unambiguously -- its body
+is literally
+
+```r
+fsom <- ReadInput(flowFrame(t(assay(x, "exprs"))))
+som <- BuildSOM(fsom, colsToUse = features, silent = TRUE, xdim = xdim, ydim = ydim)
+```
+
+i.e. `FlowSOM::ReadInput()` and `FlowSOM::BuildSOM()`, called directly. The
+100-node 10x10 grid above was trained by FlowSOM's own code, not a
+lookalike.
+
+The second half of what "FlowSOM" usually means -- collapsing those 100 SOM
+nodes into a handful of metaclusters -- is where `cluster()` quietly departs
+from FlowSOM: it hands the SOM codes to
+`ConsensusClusterPlus::ConsensusClusterPlus()` instead of to FlowSOM's own
+`metaClustering_consensus()`. Both are consensus-clustering approaches, but
+they are different implementations and are not guaranteed to agree.
+
+```{r metaclustering-load}
+metaclustering_compare <- readRDS("support/metaclustering/metaclustering_compare.rds")
+metaclustering_compare
+```
+
+Re-running the metaclustering step on the *identical* SOM codes and mapping
+from the chunk above -- changing only ConsensusClusterPlus for
+`FlowSOM::metaClustering_consensus(som$map$codes, k = 12, seed = 1234)` --
+gives an ARI of `r round(metaclustering_compare$ari_meta12[2], 3)`, against
+`r round(metaclustering_compare$ari_meta12[1], 3)` for CATALYST's
+ConsensusClusterPlus default (reproduced here exactly, confirming both the
+SOM step and this comparison are deterministic). FlowSOM's own metaclustering
+is marginally *better* on this dataset, not worse -- so there is no accuracy
+cost to CATALYST's substitution here, but the two are measurably different
+algorithms, not interchangeable labels for the same computation, and the
+rest of this vignette uses CATALYST's ConsensusClusterPlus path throughout
+(via `cluster()`) for consistency with the baseline above.
 
 ## How much does the cofactor choice matter?
 
@@ -362,7 +559,7 @@ configuration here -- against whatever ground truth or domain knowledge is
 available is a more reliable starting point than copying a cofactor from a
 different dataset's methods section.
 
-## Does an automated, normality-based cofactor estimator do better?
+## Does an automated, per-donor, per-marker cofactor estimator do better?
 
 The sweep above answers "which flat cofactor works best here," but it still
 only tests values a human chose to test. `CyEt` ("Cytometry Ensemble
@@ -378,168 +575,217 @@ purely a property of each marker's own univariate distribution. That makes
 it a genuinely independent check on the cofactors used above: does
 "most normal-looking" line up with "clusters best"?
 
-```{r cyet-run, eval = FALSE}
-## Not evaluated when building this vignette: ~2 hours for 24 markers on
-## 8 cores (CyEt's Shapiro-Wilk grid search is run per marker, independent
-## of every other marker, over a 241 x 22 (b-value x window) grid). The
-## cached result loaded below (support/cyet/cyet_table_final.rds) is this
-## exact call's output.
-library(CyEt)
-raw_mat <- do.call(rbind, flowCore::fsApply(fs, flowCore::exprs, simplify = FALSE))
-set.seed(1234)
-sub_idx <- sample.int(nrow(raw_mat), 40000)
-cyet_b <- optimizeBvalueMatrix(
-    raw_mat[sub_idx, panel$fcs_colname],
-    markers = panel$fcs_colname, n_cores = 8, verbose = TRUE,
-    b_test_range = -20:220, seed = 1234
-)
+CyEt is a per-*sample* cofactor estimator: `optimizeBvalueVector()` takes
+one marker's values from one set of cells and nothing else. Since the 7
+donors here were stained and acquired separately, the correct granularity
+is **per donor *and* per marker** -- 7 x 24 = 168 independent
+`optimizeBvalueVector()` calls, one per donor-marker combination, each
+using only that donor's own cells. Pooling cells across donors first (as
+`CyEt::optimizeBvalueMatrix()` does, with no sample- or donor-level
+grouping of its own) would hide any donor-to-donor heterogeneity in each
+marker's best-fitting cofactor and average over it instead, so this
+vignette does not use `optimizeBvalueMatrix()` at all.
+
+Run at full scale (each donor's ~100,000 cells, unsampled) this is far
+too slow: timing a single donor-marker combination this way took
+**63 minutes**, because `optimizeBvalueVector()`'s weighted resampling
+step scales with input size, and a single donor's cell count is actually
+*larger* than the 40,000-cell pooled subsample used above (spread across
+all 7 donors). Subsampling each donor to 6,000 cells first -- comparable
+to that same pooled budget split 7 ways -- cuts this to 82 seconds with an
+*identical* result (verified directly), making the full 168-combination
+grid tractable: **57.5 minutes** total on 8 cores.
+
+```{r cyet-per-donor-run, eval = FALSE}
+## Not evaluated when building this vignette (~1 hour on 8 cores); cached
+## result loaded below (support/cyet/cyet_per_donor_resolved.rds).
+combos <- expand.grid(donor = seq_along(unique(sce$donor)),
+    marker = panel$fcs_colname, stringsAsFactors = FALSE)
+run_one <- function(i) {
+    donor <- combos$donor[i]; marker <- combos$marker[i]
+    x <- raw_mat[md$donor_vec == donor, marker]
+    x <- x[sample.int(length(x), min(6000, length(x)))]
+    res <- optimizeBvalueVector(x, b_test_range = -20:220,
+        seed = 1000 * donor + match(marker, panel$fcs_colname))
+    data.frame(donor = donor, marker = marker, b = res$optimal_b,
+        boundary_flag = res$boundary_flag)
+}
+per_donor_cyet <- do.call(rbind, parallel::mclapply(seq_len(nrow(combos)), run_one, mc.cores = 8))
 ```
 
-```{r cyet-load}
-cyet_table <- readRDS("support/cyet/cyet_table_final.rds")
-cyet_table[order(cyet_table$marker_class, cyet_table$marker),
-    c("marker", "marker_class", "cyet_b", "boundary_artifact")]
-```
+```{r cyet-per-donor-load, fig.width = 8, fig.height = 6}
+per_donor_cyet <- readRDS("support/cyet/cyet_per_donor_resolved.rds")
+rownames(per_donor_cyet) <- NULL
+cat(sum(per_donor_cyet$boundary_flag), "of", nrow(per_donor_cyet),
+    "donor-marker combinations hit the boundary artifact:\n")
+per_donor_cyet[per_donor_cyet$boundary_flag, c("donor", "marker", "b")]
 
-One marker, CD45, needs a second look before using its value: at
-`b_test_range = -20:220` the optimizer returns
-`r round(cyet_table$cyet_b[cyet_table$marker == "CD45"], 3)`, exactly
-`1.1^-20` -- the lower edge of the tested grid. CyEt's own documentation
-calls this a `boundary_low` artifact: the true optimum lies somewhere the
-search never looked, and the value should not be trusted as-is. Extending
-the search downward resolves it, but not to a small number --
-
-```{r cyet-cd45, eval = FALSE}
-## Also not evaluated here (~12 minutes for one marker); cached below.
-cd45_extended <- optimizeBvalueVector(
-    raw_mat[sub_idx, "CD45"], b_test_range = -60:220, seed = 1234, verbose = TRUE)
-```
-
-```{r cyet-cd45-result}
-cd45_row <- cyet_table[cyet_table$marker == "CD45", ]
-cat("Boundary-run value:", round(cd45_row$cyet_b, 3), "\n")
-cat("Extended-range value:", round(cd45_row$cyet_b_resolved, 1),
-    "(boundary_flag = FALSE, method = u_shape_bottom, confidence = 0.9)\n")
-```
-
-The extended search lands on
-`r format(round(cd45_row$cyet_b_resolved, 0), big.mark = ",", scientific = FALSE)`
--- nearly linear, the *opposite*
-extreme from the boundary artifact's near-zero value. CD45's
-normality-score curve has two separate local optima, one near each end of
-the scale, and which one a Shapiro-Wilk-based search finds depends on where
-it happens to look. That is not a bug in CyEt's implementation; it is a
-real property of this marker's distribution (CD45 is a very bright,
-near-universally-expressed pan-leukocyte marker with an unusually wide
-dynamic range), and a useful caution for anyone treating "most normal under
-arcsinh" as if it always had one well-defined answer.
-
-```{r fig-cyet-compare, fig.width = 7, fig.height = 5}
-compare_df <- cyet_table
-compare_df$current_vignette_cofactor <- spectral_cofactors[compare_df$marker]
-compare_long <- reshape2::melt(
-    compare_df[, c("marker", "marker_class", "cyet_b_resolved", "current_vignette_cofactor")],
-    id.vars = c("marker", "marker_class"))
-compare_long$variable <- factor(compare_long$variable, labels = c(
-    "CyEt (normality-optimal)", "This vignette (paper 8 + 6,000 fallback)"))
-marker_order <- compare_df$marker[order(compare_df$cyet_b_resolved)]
-compare_long$marker <- factor(compare_long$marker, levels = marker_order)
-
-ggplot(compare_long, aes(
-    x = marker, y = value,
-    colour = variable, shape = marker_class)) +
-    geom_point(size = 3) +
-    scale_y_log10(labels = scales::label_number(big.mark = ",")) +
-    coord_flip() +
-    labs(x = NULL, y = "Cofactor (log scale)", colour = NULL, shape = "Marker class",
-        title = "CyEt's per-marker, normality-optimal cofactor vs. this vignette's choice") +
+ggplot(per_donor_cyet, aes(x = factor(donor), y = marker, fill = b)) +
+    geom_tile(colour = "white") +
+    scale_fill_viridis(trans = "log10", name = "CyEt b\n(per donor)") +
+    labs(x = "Donor", y = NULL,
+        title = "Per-donor, per-marker CyEt cofactors (pre-boundary-resolution)") +
     theme_minimal()
 ```
 
-Grouping CyEt's values by marker class makes the type-vs-state question
-concrete. Excluding CD45 (whose two-sided optimum, just shown, resists a
-single summary value either way):
-`r { tm <- cyet_table$cyet_b_resolved[cyet_table$marker_class == "type" & cyet_table$marker != "CD45"]; round(median(tm), 0) }`
-is the median CyEt cofactor across the remaining 13 type (lineage) markers,
-versus
-`r { sm <- cyet_table$cyet_b_resolved[cyet_table$marker_class == "state"]; round(median(sm), 0) }`
-across the 10 state (functional) markers -- roughly double. So yes, by this
-independent, data-driven measure, lineage and functional markers in this
-panel do systematically want different cofactors; a single flat value
-cannot be simultaneously optimal for both groups. In practice that
-asymmetry is invisible to every metric used so far in this vignette,
-because `cluster()` is only ever given `type_markers(sce)` as clustering
-features (see the `cluster` chunk above) -- state-marker cofactors have
-no path to affect ARI or the ambiguity ratio at all. They would matter for
-anything that reads state-marker expression directly, such as a
-differential-state test on the user's curated groups, where forcing a
-continuously-distributed activation marker through the same flat cofactor
-as a sharply bimodal lineage marker is more likely to misrepresent it.
+Running CyEt correctly, per donor, surfaces something the pooled run
+hid completely: **pooling was masking real donor-to-donor heterogeneity**,
+and it was also masking a *second* boundary artifact. CD45 hits the exact
+same `1.1^-20` floor seen earlier, but now on 4 of the 7 donors (1, 4, 5,
+and 7) rather than uniformly -- the other 3 donors (2, 3, 6) resolve to
+enormous, consistent values (~2-2.6x10^5). GZMB, which looked
+unremarkable in the pooled run (b ~ 1,272), turns out to hit that same
+floor for donor 4 specifically. Both are resolved the same way as CD45
+was resolved earlier: each boundary-flagged donor's value is replaced
+with that marker's median value among its own *non*-boundary donors.
 
-That leaves the real question: is CyEt's normality-optimal cofactor set
-*better* for clustering than the paper-based one this vignette uses? Rerun
-`prepData()` and `cluster()` exactly as above, substituting CyEt's
-per-marker values for the 14 type markers (state markers never reach
-`cluster()`, so their cofactor choice is tested separately, above, and
-omitted here):
-
-```{r cyet-ari-load}
-cyet_ari <- readRDS("support/cyet/cyet_ari_full.rds")
-cyet_ari
+```{r fig-cyet-per-donor-resolved, fig.width = 8, fig.height = 6}
+ggplot(per_donor_cyet, aes(x = factor(donor), y = marker, fill = b_resolved)) +
+    geom_tile(colour = "white") +
+    geom_text(data = per_donor_cyet[per_donor_cyet$boundary_flag, ],
+        aes(label = "*"), colour = "white", size = 5) +
+    scale_fill_viridis(trans = "log10", name = "CyEt b\n(resolved)") +
+    labs(x = "Donor", y = NULL,
+        title = "Per-donor, per-marker CyEt cofactors (boundary cases resolved, starred)") +
+    theme_minimal()
 ```
 
-```{r cyet-ari-code, eval = FALSE}
-## The code that produced the table above (re-run of prep-data + cluster +
-## ari, substituting CyEt's per-marker cofactors for the 14 type markers;
-## state-marker cofactors are confirmed not to matter for this metric by
-## comparing rows 1-2, which differ only in the state-marker cofactor and
-## are numerically identical).
-type_m_names <- panel$fcs_colname[panel$marker_class == "type"]
-cf_cyet <- setNames(rep(6000, length(common_markers)), common_markers)
-cf_cyet[type_m_names] <- cyet_table$cyet_b_resolved[match(type_m_names, cyet_table$marker)]
-sce_cyet <- prepData(fs, panel, md, features = panel$fcs_colname,
-    transform = TRUE, cofactor = cf_cyet, FACS = TRUE,
-    md_cols = list(file = "file_name", id = "sample_id",
-        factors = c("donor", "known_population")))
-sce_cyet <- cluster(sce_cyet, features = type_markers(sce_cyet),
+Setting the two boundary artifacts aside, the donor-to-donor spread is
+real and substantial for several markers -- CD3 ranges
+`r round(min(per_donor_cyet$b_resolved[per_donor_cyet$marker == "CD3"]), 0)`-`r round(max(per_donor_cyet$b_resolved[per_donor_cyet$marker == "CD3"]), 0)`
+across donors, CD14
+`r round(min(per_donor_cyet$b_resolved[per_donor_cyet$marker == "CD14"]), 0)`-`r round(max(per_donor_cyet$b_resolved[per_donor_cyet$marker == "CD14"]), 0)`
+-- which is exactly the donor-level variation a single pooled cofactor, or
+this vignette's own single global per-marker cofactor, necessarily
+averages away. Whether *using* that per-donor variation (transforming
+each donor with its own cofactor, then explicitly re-aligning the donors)
+helps or hurts clustering is a different question, taken up next.
+
+## The full pipeline: per-donor CyEt, then cyCombine, then scale
+
+The natural way to *use* the per-donor cofactor heterogeneity just found,
+rather than merely document it, is the standard three-step recipe: transform
+each donor with its own per-marker cofactor, explicitly realign the donors
+(since independently-chosen per-donor transforms are themselves a new
+source of cross-donor mismatch on top of whatever was already there), then
+scale, all before FlowSOM. We test this with
+[`cyCombine`](https://github.com/biosurf/cyCombine) (Pedersen *et al.*
+2022, *Nature Communications* 13:391) for the realignment step, which runs
+[`sva::ComBat`](https://bioconductor.org/packages/sva/) per internal
+SOM-defined cell-state group rather than once globally, so the correction
+cannot flatten away real between-population differences that happen to be
+unevenly distributed across donors. `cyCombine` is not on CRAN or
+Bioconductor (install with `remotes::install_github("biosurf/cyCombine")`),
+so it is **not** added to this package's `Suggests:` -- unlike CyEt and
+this vignette's other Suggests, doing so would not resolve on a standard
+Bioconductor build machine. The code below is real and was run to produce
+the cached numbers that follow, but is not re-run when this vignette is
+built.
+
+```{r cycombine-correct, eval = FALSE}
+library(cyCombine)
+
+## Step 1: arcsinh-transform each donor's cells with THAT donor's own
+## per-marker CyEt cofactor (cyet_per_donor_resolved from the previous
+## section), not a single shared value.
+all_m <- c(type_markers(sce_prepped), state_markers(sce_prepped))
+b_lookup <- setNames(per_donor_cyet$b_resolved,
+    paste(per_donor_cyet$donor, per_donor_cyet$marker))
+transformed <- raw_mat[, all_m]
+for (dn in seq_along(unique(sce_prepped$donor))) {
+    rows <- md$donor_vec == dn
+    for (m in all_m) transformed[rows, m] <- asinh(raw_mat[rows, m] / b_lookup[paste(dn, m)])
+}
+
+## Step 2: cyCombine realigns the per-donor-transformed data across donors.
+expr_df <- as.data.frame(transformed)
+expr_df$batch <- sce_prepped$donor
+expr_df$id <- seq_len(nrow(expr_df))
+set.seed(1234)
+corrected <- batch_correct(
+    expr_df, markers = all_m, label = NULL,  # label = NULL: cyCombine
+    xdim = 8, ydim = 8, seed = 1234,         # builds its own internal SOM
+    norm_method = "scale", method = "ComBat" # to group cells before ComBat
+)
+corrected <- corrected[order(corrected$id), ]
+corrected_mat <- as.matrix(corrected[, all_m])
+
+## Step 3: the explicit "and then scale" step -- a separate z-score per
+## marker, across all cells and donors, applied to the ComBat-corrected
+## values (cyCombine's own norm_method = "scale" above only feeds its
+## internal grouping SOM, not the values it returns).
+scaled_mat <- scale(corrected_mat)
+
+sce_cc <- sce_prepped
+assay(sce_cc, "exprs") <- t(scaled_mat[, rownames(sce_cc)])
+sce_cc <- cluster(sce_cc, features = type_markers(sce_cc),
     xdim = 10, ydim = 10, maxK = 12, seed = 1234, verbose = FALSE)
-mclust::adjustedRandIndex(cluster_ids(sce_cyet, "meta12"), sce_cyet$known_population)
+mclust::adjustedRandIndex(cluster_ids(sce_cc, "meta12"), sce_cc$known_population)
 ```
 
-The answer is no, clearly: every CyEt-based configuration lands at
-ARI `r round(min(cyet_ari$ari_meta12[1:2]), 2)`-`r round(max(cyet_ari$ari_meta12[5:6]), 2)`,
-versus `r round(cyet_ari$ari_meta12[cyet_ari$config == "Current vignette (paper 8 + 6000 fallback)"], 3)`
-for this vignette's paper-based cofactors and
-`r round(cyet_ari$ari_meta12[cyet_ari$config == "Flat 2000 (sweep ARI peak)"], 3)`
-for the flat-sweep optimum. Three different ways of handling CD45 (the
-boundary artifact as-is, swapped for the type-marker median, swapped for
-the extended-range-resolved value) all land in the same
-0.87-0.89 band, confirming this is not one bad marker dragging the average
-down -- it is systematic across the type-marker set. The reason connects
-directly to the inverted-U curve from the previous section: CyEt's median
-type-marker cofactor
-(`r round(median(cyet_table$cyet_b_resolved[cyet_table$marker_class == "type" & cyet_table$marker != "CD45"]), 0)`)
-sits on the *low, losing* side of that curve, in the same region as this
-vignette's original, unexamined default of 150. Shapiro-Wilk normality and
-cluster separability are simply different objectives: a per-marker cofactor
-that makes a bimodal negative/positive distribution look symmetric and
-unimodal (good for normality) is, almost by construction, pulling the two
-modes of that distribution *together* -- precisely what clustering does not
-want. The two objectives happen to agree over some range of cofactors (hence
-CyEt is not catastrophically wrong, just worse), but nothing about
-"most normal-looking" guarantees "best separated," and here it measurably
-is not.
+```{r cycombine-load}
+cycombine_ari <- readRDS("support/cycombine/cycombine_per_donor_compare.rds")
+rownames(cycombine_ari) <- NULL
+cycombine_ari
+```
 
-To summarize this and the previous section's investigation directly: no,
-`6,000` is not the ARI-optimal flat cofactor for this dataset (`2,000` is,
-by a small margin); the paper's own per-marker values and the `6,000`
-fallback both sit safely on the high-ARI plateau rather than at its peak;
-CyEt's independent, normality-based per-marker estimates do *not* improve
-on either, because they optimize a different and here partially
-antagonistic objective; and lineage and functional markers do warrant
-different cofactors in this panel by CyEt's own measure, even though that
-difference does not show up in `cluster()`-based diagnostics, only in
-analyses that use state-marker expression directly.
+```{r fig-cycombine-compare, fig.width = 7, fig.height = 4}
+cycombine_ari$config <- factor(cycombine_ari$config, levels = rev(cycombine_ari$config))
+ggplot(cycombine_ari, aes(x = config, y = ari_meta12)) +
+    geom_col(fill = "steelblue") +
+    geom_text(aes(label = round(ari_meta12, 3)), hjust = -0.1) +
+    scale_y_continuous(limits = c(0, 1)) +
+    coord_flip() +
+    labs(x = NULL, y = "ARI (meta12 vs. known_population)",
+        title = "Per-donor CyEt -> cyCombine -> scale, before FlowSOM: does it help?") +
+    theme_minimal()
+```
+
+It does not, at any step of the pipeline. Per-donor CyEt transformation
+*alone* -- before any attempt to realign the donors -- drops ARI to
+`r round(cycombine_ari$ari_meta12[cycombine_ari$config == "Per-donor CyEt transform only"], 3)`,
+noticeably worse even than the already-disappointing *pooled* CyEt result
+from the previous section (0.87-0.89): giving each donor its own
+independently-chosen, normality-optimal cofactor does not just inherit the
+pooled run's normality-vs-separability mismatch, it adds a second,
+independent source of cross-donor misalignment on top, since two donors'
+"most normal-looking" cofactors for the same marker can differ several-fold
+(CD3: `r round(min(per_donor_cyet$b_resolved[per_donor_cyet$marker == "CD3"]), 0)`-`r round(max(per_donor_cyet$b_resolved[per_donor_cyet$marker == "CD3"]), 0)`)
+with nothing to keep the resulting transformed scales consistent across
+donors.
+
+cyCombine's realignment step recovers a substantial part of that self-inflicted
+damage -- ARI rises to
+`r round(cycombine_ari$ari_meta12[cycombine_ari$config == "Per-donor CyEt + cyCombine"], 3)`,
+consistent with much of what per-donor CyEt broke being exactly the kind of
+cross-donor distributional mismatch ComBat is designed to remove -- but
+this still falls well short of this vignette's simple baseline (a single,
+shared per-marker cofactor, no batch correction at all):
+`r round(cycombine_ari$ari_meta12[cycombine_ari$config == "Baseline (paper cofactors, global)"], 3)`.
+Adding the explicit z-scale on top of cyCombine barely moves the needle
+here (`r round(cycombine_ari$ari_meta12[cycombine_ari$config == "Per-donor CyEt + cyCombine + z-scale"], 3)`)
+-- unlike scaling *without* cyCombine first
+(`r round(cycombine_ari$ari_meta12[cycombine_ari$config == "Per-donor CyEt + z-scale (no cyCombine)"], 3)`,
+scaling makes the uncorrected per-donor misalignment barely better, not
+worse, here), suggesting that once ComBat has already pulled every
+marker's across-donor scale into a comparable range, a further per-marker
+z-score has less additional information left to destroy.
+
+The overall picture is consistent across every step of this corrected,
+"use CyEt the way it is intended" pipeline: `known_population` is not
+independent of donor here (each donor contributes its own genuinely
+different mixture and intensity of immune cell states), so (a) optimizing
+a per-donor cofactor for marginal normality, then (b) forcing the
+resulting donor-specific scales back into alignment, removes real
+between-population signal FlowSOM relies on at both steps, and recovers
+only part of what it costs. Batch correction -- and, for the same reason,
+per-sample cofactor optimization -- can be the right tool when "batch" is
+cleanly separable from biology (different acquisition days or instruments
+for the *same* donors, for example); here, where "batch" and "donor" are
+the same variable and the ground truth is itself organized by donor, it is
+not, and this vignette's existing pipeline (one shared per-marker
+cofactor, no batch correction, no additional scaling) remains the better
+choice on this dataset.
 
 ## Building the CySA inputs
 

@@ -41,3 +41,10 @@ test.RData
 test2.RData
 test_datasets.Rmd
 testfile
+
+# Vignette-generated analysis caches and regeneration artifacts
+vignettes/spectral_analysis/
+vignettes/support/cyet/qc/
+*.log
+*.bak
+vignettes/spectral_flow_case_detailed_study.pdf

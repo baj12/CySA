@@ -1,0 +1,2307 @@
+---
+title: 'Preprocessing factorial for spectral flow data: cofactor x batch correction
+  x scaling x marker weights x distance'
+author: "Bernd Jagla, Institut Pasteur"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+  pdf_document:
+    toc: true
+    latex_engine: xelatex
+    toc_depth: '3'
+params:
+  n_cores: 4
+  dev_n: 0
+  top_k: 5
+  n_amb: 50000
+  n_seeds: 5
+editor_options:
+  markdown:
+    wrap: 80
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE,
+    fig.width = 8, fig.height = 5
+)
+```
+
+## Overview
+
+The CySA case study on the Zenodo spectral flow data
+(10.5281/zenodo.15723074; 56 FCS files = 8 manually gated populations x 7
+donors, 24 markers, Cytek Aurora) ran **one** preprocessing pipeline and then
+tested a few alternatives one at a time. This document tests the choices
+**jointly**, so that interactions become visible. It asks:
+
+1. Which **arcsinh cofactor** strategy works best?
+2. Does **batch correction** (cyCombine, donors = batches) help or hurt?
+3. Does **scaling** of the markers help or hurt, and which kind?
+4. Does **weighting** markers (an oracle upper bound) help?
+5. Do other **distance functions** inside the SOM behave differently?
+   FlowSOM's `SOM()` supports Manhattan, Euclidean, Chebyshev and cosine.
+
+As before, the 56 files give a hidden ground truth: `known_population`. It is
+never given to the clustering. It is used only (a) to score the result and
+(b) for the explicitly labelled **oracle** options (cofactor chosen by ARI,
+marker weights from the labels).
+
+### How this document is organised
+
+1. **Overview** (this section): the scores, the design, the stages and the
+   hypotheses.
+2. **Setup, data and metrics**: everything needed to read a number in the
+   results.
+3. **Diagnostics**: a look at the data *before* any clustering. It asks what the
+   SOM "sees", whether donor offsets are technical or compositional, and whether
+   a marker's spread is a good proxy for its information. It ends with the
+   expectations that the factorial then tests.
+4. **Implementing the factors**: one small function per factor.
+5. **Run engine, engine checks and noise floor**: how a run works, and how much
+   a single run can resolve.
+6. **Stages 0-3 and the verdict**: the factorial, seed replication, transfer to
+   other grid sizes and `k`, and a verdict per hypothesis.
+
+### How results are scored
+
+All scores compare an unsupervised clustering with the hidden labels.
+
+**Adjusted Rand index (ARI)**, computed with `mclust::adjustedRandIndex()`.
+The (unadjusted) Rand index is the fraction of all cell *pairs* on which two
+partitions agree: both put the pair together, or both put it apart. The
+*adjustment* subtracts the agreement expected from chance grouping alone, so
+a random, uninformative clustering scores ARI ~ 0 and a perfect match (up to
+arbitrary relabelling) scores 1. Here the two partitions are the FlowSOM
+**metaclusters** (the 100 SOM nodes collapsed to `k` = 12 by consensus
+clustering, never seeing labels) versus `known_population`.
+
+Further columns recorded for every run (details in the "Metrics" section):
+
+| Column | Meaning |
+|---|---|
+| `ari` | ARI of metaclusters vs. known population (the headline score) |
+| `ari_node_majority` | ARI obtained if every SOM node is labelled with its majority population. It does not depend on the metaclustering step, so it separates SOM quality from metaclustering luck |
+| `ari_donor` | ARI of metaclusters vs. **donor**. It is *not* 0 for a perfect clustering, because donors differ in composition. The reference is `donor_floor` = ARI(population, donor), computed in the "Metrics" section. Clearly above the floor = the clustering splits populations by donor, i.e. batch effect |
+| `node_purity` | Fraction of cells lying in the majority population of their SOM node |
+| `pct_ambiguous` | % of cells with own/rival distance ratio > 0.9 (CySA's cluster-ambiguity diagnostic), using the SOM's own distance function |
+| `median_ratio` | Median own/rival ratio |
+| `pct_mapping_agree` | Diagnostic: % of cells for which FlowSOM's own `mapping` equals our nearest-node assignment under the training distance. ~100 means FlowSOM's mapping uses the same distance as the training |
+| `n_empty_nodes` | SOM nodes that ended up with no cells |
+| `runtime_s` | Wall-clock time of the run |
+
+### Design
+
+| Factor | Levels | Comment |
+|---|---|---|
+| **cofactor** | `paper` (per-marker values from Tursi et al., 6,000 for the 16 uncovered markers); `flat_150` (conventional-flow default; known-bad negative control); `flat_6000` (CytoPheno's spectral default); `flat_<best>` (flat value with best ARI in stage 0; **oracle**); `cyet_donor` (CyEt per-donor per-marker, Shapiro-Wilk based, label-free) | Strategies for *how the cofactor is calculated* |
+| **batch** | `none`, `cyCombine` (donor = batch; ComBat per SOM-defined cell-state group) | cyCombine is applied to all 24 markers after the cofactor transform |
+| **scaling** | `none`, `center_global`, `donor_median`, `alpha0.5`, `zscore`, `robust_z`, `pct_range`, `donor_z` | Defined in "Implementing the factors" |
+| **weighting** | `none`, `sqrt_eta2` (oracle: label-derived marker weights) | |
+| **distance** | Manhattan (1), Euclidean (2), Chebyshev (3), cosine (4) | `distf` of `FlowSOM::SOM()` |
+
+Fixed in stage 1: 10x10 grid, `rlen = 10`, `mst = 1`, 12 metaclusters, seed
+1234. FlowSOM's `SOM()` is called **directly** (not CATALYST's `cluster()`),
+and the metaclustering is FlowSOM's own `metaClustering_consensus()`.
+
+### Stages
+
+* **Engine checks**: two cheap deterministic tests of the pipeline itself
+  (translation invariance; which distance FlowSOM's `mapping` uses).
+* **Stage 0**: flat-cofactor sweep (13 values, `n_seeds` seeds each). Determines
+  the oracle `flat_<best>`.
+* **Stage 1**: full factorial, one seed. A *screen* that generates hypotheses.
+* **Stage 2**: replicate the finalists from stage 1 over several seeds (SOM
+  training is stochastic), including mathematically identical "twins" as a
+  noise calibration.
+* **Stage 3**: re-run the finalists at other grid sizes and `k`, to see whether
+  the ranking transfers or was tuned to one setting.
+
+### Hypotheses (stated before looking at clustering results)
+
+The hypotheses were fixed before any clustering was scored. They do draw on the
+diagnostics below (marker spread, eta^2, donor offsets), which look only at the
+data, not at clustering results.
+
+| | Hypothesis | Why we expect it | Tested in |
+|---|---|---|---|
+| **H0** | **Mathematical certainty:** global centering changes nothing for Manhattan, Euclidean and Chebyshev distance, because these depend only on *differences* between cells. Only the cosine distance depends on the origin. `center_global` is included as a built-in invariance test of the whole pipeline | Algebra | Engine checks, noise floor |
+| **H1** | Dividing by the SD (`zscore`, `robust_z`, `pct_range`) inflates noise-only markers (CD14, GNLY, CD103; see eta^2 plot) and lowers ARI | These markers have low SD and low eta^2 | Paired factor effects |
+| **H2** | `donor_median` helps only if donor offsets are technical rather than compositional | Offsets within populations vs. between donors | Paired effects, donor leakage |
+| **H3** | Cosine distance reacts to centering and scaling differently from the other three distances | Cosine depends on the origin | Noise floor, scaling x distance |
+| **H4** | Neither per-donor CyEt nor cyCombine beats the paper cofactors (consistent with the earlier vignette) | Both equalise donors that differ in composition | Paired effects, leaders |
+| **H5** | Oracle weights give an upper bound on what weighting could achieve | Weights use the labels | Paired effects, leaders |
+
+Because hundreds of pipelines are compared on the same labels, the "best" cell
+is optimistic. Stages 2 and 3 exist to check that it is not a seed or grid-size
+accident.
+
+### Running this document
+
+```r
+rmarkdown::render("spectral_flow_case_detailed_study.Rmd",
+                  params = list(n_cores = 8))
+# quick smoke test on 40,000 cells (writes to spectral_analysis_dev/):
+rmarkdown::render("spectral_flow_case_detailed_study.Rmd",
+                  params = list(n_cores = 4, dev_n = 40000))
+```
+
+## Setup and caching
+
+```{r libs}
+library(flowCore)
+library(FlowSOM)
+library(ggplot2)
+library(viridis)
+library(matrixStats)
+stopifnot(requireNamespace("mclust", quietly = TRUE),
+          requireNamespace("stringi", quietly = TRUE))
+have_cycombine <- requireNamespace("cyCombine", quietly = TRUE)
+if (!have_cycombine) {
+    message("cyCombine is not installed (remotes::install_github('biosurf/cyCombine')); ",
+            "all cyCombine configurations will be skipped.")
+}
+```
+
+Every output is written below `out_dir`. The helper `cached()` evaluates its
+expression **only if the file does not exist**; otherwise it reads the file.
+Writes are atomic (temp file, then rename), so an interrupted session cannot
+leave a half-written cache file that later looks valid.
+
+```{r cache-helpers}
+out_dir <- if (params$dev_n > 0) "spectral_analysis_dev" else "spectral_analysis"
+for (d in c("", "figures", "runs", "cycombine")) {
+    dir.create(file.path(out_dir, d), recursive = TRUE, showWarnings = FALSE)
+}
+n_cores <- if (.Platform$OS.type == "windows") 1L else as.integer(params$n_cores)
+top_k   <- as.integer(params$top_k)
+
+#' Atomically write an RDS file.
+#' @param obj object to save
+#' @param path destination path
+save_rds_atomic <- function(obj, path) {
+    tmp <- paste0(path, ".tmp", Sys.getpid())
+    saveRDS(obj, tmp)
+    file.rename(tmp, path)
+    invisible(path)
+}
+
+#' Compute-once helper.
+#' @param file file name relative to `out_dir` (should end in .rds)
+#' @param expr expression producing the object; evaluated lazily, only when
+#'   the cache file is missing
+#' @param csv if the result is a data.frame, also write a .csv next to it
+#' @return the object (read from disk or freshly computed)
+cached <- function(file, expr, csv = TRUE) {
+    path <- file.path(out_dir, file)
+    if (file.exists(path)) {
+        message("[cache hit]  ", path)
+        return(readRDS(path))
+    }
+    message("[computing]  ", path)
+    res <- expr
+    save_rds_atomic(res, path)
+    if (csv && is.data.frame(res)) {
+        utils::write.csv(res, sub("\\.rds$", ".csv", path), row.names = FALSE)
+    }
+    res
+}
+
+#' Print a ggplot and save it as PNG in `out_dir/figures` (only if not yet there).
+show_plot <- function(p, name, width = 8, height = 5) {
+    f <- file.path(out_dir, "figures", paste0(name, ".png"))
+    if (!file.exists(f)) ggsave(f, p, width = width, height = height, dpi = 150)
+    print(p)
+    invisible(p)
+}
+
+dist_labels <- c(`1` = "manhattan", `2` = "euclidean", `3` = "chebyshev", `4` = "cosine")
+```
+
+## Data
+
+### Download
+
+All 56 FCS files are fetched from Zenodo's file API, one HTTPS GET per file
+(no login or API key). The chunk only runs if the files are not there yet.
+
+```{r download, eval = !dir.exists("spectral_fcs") || length(list.files("spectral_fcs", pattern = "\\.fcs$")) < 56}
+record_id <- "15723074"
+rec <- jsonlite::fromJSON(paste0("https://zenodo.org/api/records/", record_id),
+                          simplifyDataFrame = FALSE)
+dir.create("spectral_fcs", showWarnings = FALSE)
+for (f in rec$files) {
+    dest <- file.path("spectral_fcs", f$key)
+    if (!file.exists(dest)) download.file(f$links$self, dest, mode = "wb", quiet = TRUE)
+}
+length(list.files("spectral_fcs", pattern = "\\.fcs$"))
+```
+
+### The CCR7/HELIOS swap
+
+The Zenodo record notes that the fluorophores for CCR7 and HELIOS were swapped
+on donors 5-7. Reading every file by its `$PnS` (`desc`) field instead of the
+physical channel name sidesteps this. The check below verifies it on the raw
+files rather than taking the record's word for it. Note that this fixes the
+*labelling* only: CCR7 is physically measured on a different fluorophore in
+donors 5-7, which can still change its brightness and spillover. We come back
+to this in the donor-offset diagnostics.
+
+```{r verify-ccr7-helios-swap}
+check_desc <- function(fp) {
+    ff <- read.FCS(fp, transformation = FALSE, truncate_max_range = FALSE)
+    pd <- pData(parameters(ff))
+    keep <- as.character(pd$desc) %in% c("CCR7", "HELIOS")
+    data.frame(name = as.character(pd$name)[keep], desc = as.character(pd$desc)[keep])
+}
+swap_check <- lapply(c(donor1 = "spectral_fcs/B_cells_donor1.fcs",
+                       donor5 = "spectral_fcs/B_cells_donor5.fcs"), check_desc)
+swap_check
+stopifnot(
+    identical(swap_check$donor1$desc[swap_check$donor1$name == "Alexa Fluor 488-A"], "HELIOS"),
+    identical(swap_check$donor5$desc[swap_check$donor5$name == "Alexa Fluor 488-A"], "CCR7")
+)
+```
+
+### One cells x markers matrix
+
+The 24 markers present with a non-NA description in all files are used.
+Thirteen lineage ("type") markers define the SOM; ten activation/exhaustion
+("state") markers plus CD45 are kept for the cofactor-transform and
+batch-correction step, which uses all 24, but are not clustered.
+
+CD45 is excluded from the SOM features specifically (while remaining in
+`all_m`, so it still gets a cofactor, gets transformed, and is batch-corrected
+like every other marker). The reason is upstream of this vignette: these FCS
+files are already the output of manual gating into 8 named immune
+populations from Ficoll-isolated PBMCs, so every cell here has already
+passed the CD45+ leukocyte gate that CD45 is normally used for (CD45 vs. SSC
+against whole blood, to separate leukocytes from debris/RBCs/platelets).
+Confirmed directly on this data: CD45's raw-scale minimum across all 725,748
+cells is 8,820 and its 1st percentile is 13,010 -- no cell is CD45-negative,
+so there is no negative population left for CD45 to discriminate between
+populations the way it's meant to upstream of here. Re-including it as a
+14th clustering dimension adds a marker whose only remaining signal is a
+~1.7x graded intensity spread across subsets (dimmest on NK/naive cells,
+brightest on effector/memory CD8+ T cells) riding on a cofactor that is,
+for exactly this reason, only weakly identifiable (see the per-donor CyEt
+section below): clustering noise, not discriminating signal.
+
+**Measured effect of this exclusion (2026-10-25 rerun):** removing CD45
+from the SOM features is not a free win on this dataset -- mean ARI drops
+slightly for every cofactor strategy (`paper` 0.824 -> 0.803, best flat
+0.851 -> 0.845, `cyet_donor` 0.733 -> 0.724), and the stage-0 oracle flat
+value shifts from 3,000 to 2,000. `cyet_donor` stays last by a wide,
+stable margin either way (paired dARI vs. `paper`: -0.091 with CD45 in
+the SOM, -0.080 without), so this exclusion does not change any
+conclusion about cofactor strategies -- it is kept for the conceptual
+reason above (CD45 cannot do the job it is included for here), not
+because it improves the numbers. The small ARI cost is consistent with
+CD45's modest non-noise signal (the graded spread just described)
+outweighing, by a little, whatever noise it also added.
+
+```{r markers}
+common_markers <- c(
+    "CCR4", "GZMB", "HELIOS", "GNLY", "CCR7", "CD4", "CD56", "CD3", "CD19",
+    "CD95", "CD8", "CD103", "CD16", "CD14", "CD69", "CCR6", "HLA-DR", "CD25",
+    "CD45RA", "PD1", "CD39", "FOXP3", "TIGIT", "CD45"
+)
+state_m <- c("CD69", "CD25", "CD39", "PD1", "TIGIT", "FOXP3", "GZMB", "CCR4",
+             "CCR6", "HELIOS")
+all_m  <- common_markers
+## CD45 is transformed/batch-corrected with everything else (stays in all_m)
+## but excluded from the SOM clustering features: these cells are already
+## manually gated into CD45+ leukocyte populations upstream, so CD45 carries
+## no negative population to discriminate here (see prose above) and only
+## adds clustering noise riding on a weakly-identifiable cofactor.
+type_m <- setdiff(common_markers, c(state_m, "CD45"))
+```
+
+The file names carry population and donor (`<population>_donor<N>.fcs`).
+Population names contain "Naïve". Depending on the source, the ï is stored
+*decomposed* (i + combining diaeresis U+0308), which the PDF graphics device
+and pdflatex cannot handle. The labels are therefore normalised and
+transliterated to plain ASCII ("Naive") right after loading.
+
+```{r inputs}
+#' Parse "<population>_donor<N>.fcs" file names.
+parse_name <- function(fn) {
+    base  <- sub("\\.fcs$", "", basename(fn))
+    donor <- as.integer(sub("_donor", "", regmatches(base, regexpr("_donor[0-9]+$", base))))
+    pop   <- gsub(" ", "_", sub("_donor[0-9]+$", "", base))
+    list(pop = pop, donor = donor)
+}
+
+inputs <- cached("00_inputs.rds", local({
+    fcs_files <- list.files("spectral_fcs", pattern = "\\.fcs$", full.names = TRUE)
+    stopifnot(length(fcs_files) == 56)
+    parts <- lapply(fcs_files, function(fp) {
+        info <- parse_name(fp)
+        ff <- read.FCS(fp, transformation = FALSE, truncate_max_range = FALSE)
+        pd <- pData(parameters(ff))
+        idx <- match(common_markers, as.character(pd$desc))
+        stopifnot(!anyNA(idx))
+        m <- exprs(ff)[, idx, drop = FALSE]
+        colnames(m) <- common_markers
+        storage.mode(m) <- "double"
+        list(m = m, pop = rep(info$pop, nrow(m)), donor = rep(info$donor, nrow(m)))
+    })
+    list(
+        raw        = do.call(rbind, lapply(parts, `[[`, "m")),   # raw intensities, cells x 24
+        population = factor(unlist(lapply(parts, `[[`, "pop"))),
+        donor      = as.integer(unlist(lapply(parts, `[[`, "donor")))
+    )
+}), csv = FALSE)
+
+raw <- inputs$raw; donor <- inputs$donor
+pop <- factor(stringi::stri_trans_general(
+    stringi::stri_trans_nfc(as.character(inputs$population)), "Latin-ASCII"))
+if (params$dev_n > 0 && params$dev_n < nrow(raw)) {
+    set.seed(1)
+    keep <- sort(sample(nrow(raw), params$dev_n))
+    raw <- raw[keep, ]; pop <- droplevels(pop[keep]); donor <- donor[keep]
+}
+N <- nrow(raw)
+donor_lab <- paste0("donor", donor)
+cat(N, "cells,", ncol(raw), "markers,", length(type_m), "type markers\n")
+table(population = pop, donor = donor)
+```
+
+Two features of this table matter throughout. Every donor contributes every
+population, so donor and population are *crossed* (good for separating batch
+from biology). But the cell counts are very unequal: for example TEMRA CD4+
+ranges from 21 to 1,884 cells per donor, and TEMRA CD8+ from 553 to 25,577.
+Donors therefore differ in composition, and any donor-wise statistic (a donor
+mean, a donor median) partly measures composition. This is the central caveat
+for the donor-based scalings and for cyCombine.
+
+## Original gating scheme, recreated per donor
+
+The Zenodo deposit includes `Manual-gating.pdf`, a single illustrative
+8-panel gating scheme from the data depositors (Tursi et al.) showing how the
+56 FCS files were produced: 1) lymphocyte scatter gate, 2) singlet gate, 3)
+CD45 vs CD14 (leukocytes), 4) CD45 vs CD19 (B cells), 5) CD3 vs CD56 (NK vs T
+cells), 6) CD4 vs CD8, and 7-8) CCR7 vs CD45RA within the CD4+ and CD8+
+branches respectively (naive/effector-memory/TEMRA). It is one representative
+figure, not one per donor.
+
+**What can and cannot be recreated from the data we actually have.** The 56
+downloaded files are themselves the *output* of that gating -- each contains
+only the cells that survived the full hierarchy down to one terminal
+population. There is no raw, ungated per-donor FCS file in this deposit. So:
+
+- Gates 1-3 (scatter gate, singlet gate, CD45 vs CD14) can only show the
+  **surviving branch** here -- the pooled union of all 8 terminal
+  populations. The excluded events (debris, doublets, CD14+ monocytes) were
+  never exported and cannot be shown.
+- Gates 4-8 (the CD19, CD3/CD56, CD4/CD8, and the two CCR7/CD45RA splits) are
+  **fully reconstructable**: every cell entering each of these gates ends up
+  in one of the 8 exported populations, so both branches of every split are
+  genuinely present in the real data below.
+
+Each of the 8 panels is recreated for all 7 donors (56 figures total, using
+every event in every file -- no subsampling), grouped by gate. Marker
+identity is looked up per file by the `$PnS` (`desc`) field rather than a
+fixed channel name/position, because of the CCR7/HELIOS fluorophore swap on
+donors 5-7 noted above -- using a fixed channel index here would mislabel
+CCR7 for 3 of the 7 donors in gates 7-8.
+
+```{r gating-figures-setup}
+gating_markers <- c("CD45", "CD14", "CD19", "CD56", "CD3", "CD4", "CD8", "CD45RA", "CCR7")
+
+#' Same ASCII-normalisation the main `inputs` chunk applies to `pop` (the
+#' decomposed "i" + combining diaeresis in "Naive" breaks the PDF device).
+norm_ascii_gate <- function(x) stringi::stri_trans_general(stringi::stri_trans_nfc(x), "Latin-ASCII")
+
+gating_load_one <- function(fp, pop, donor_id) {
+    ff <- read.FCS(fp, transformation = FALSE, truncate_max_range = FALSE)
+    pd <- pData(parameters(ff))
+    idx <- match(gating_markers, as.character(pd$desc))
+    stopifnot(!anyNA(idx))
+    ex <- exprs(ff)
+    m  <- ex[, c("FSC-A", "FSC-H", "SSC-A"), drop = FALSE]
+    m2 <- ex[, idx, drop = FALSE]; colnames(m2) <- gating_markers
+    out <- as.data.frame(cbind(m, m2))
+    out$population <- pop; out$donor <- donor_id
+    out
+}
+
+gating_data <- cached("00_gating_figure_data.rds", local({
+    fcs_files <- list.files("spectral_fcs", pattern = "\\.fcs$", full.names = TRUE)
+    parts <- lapply(fcs_files, function(fp) {
+        info <- parse_name(fp)
+        gating_load_one(fp, norm_ascii_gate(info$pop), info$donor)
+    })
+    do.call(rbind, parts)
+}), csv = FALSE)
+
+cat(sprintf("%d cells loaded for gating figures (full event counts)\n", nrow(gating_data)))
+```
+
+```{r gating-figures-defs}
+POP_B      <- "B_cells"
+POP_NK     <- "NK_cells"
+POP_EM_CD4 <- "Effector_memory_CD4+_T_cells"
+POP_NA_CD4 <- "Naive_CD4+_T_cells"
+POP_TE_CD4 <- "TEMRA_CD4+_T_cells"
+POP_NA_CD8 <- "Naive_CD8+_T_cells"
+POP_EM_CD8 <- "Effector_memory_CD8+_T_cells"
+POP_TE_CD8 <- "TEMRA_CD8+_T_cells"
+GATE_ALL8  <- c(POP_B, POP_NK, POP_EM_CD4, POP_NA_CD4, POP_TE_CD4, POP_NA_CD8, POP_EM_CD8, POP_TE_CD8)
+
+gate_pop_short <- c(
+    B_cells = "B cells", NK_cells = "NK cells",
+    "Effector_memory_CD4+_T_cells" = "EM CD4", "Naive_CD4+_T_cells" = "Naive CD4",
+    "TEMRA_CD4+_T_cells" = "TEMRA CD4", "Naive_CD8+_T_cells" = "Naive CD8",
+    "Effector_memory_CD8+_T_cells" = "EM CD8", "TEMRA_CD8+_T_cells" = "TEMRA CD8"
+)
+
+gate_defs <- list(
+    list(id = 1, dir = "gate1_lymphocytes", title = "Gate 1: Lymphocytes (FSC-A vs SSC-A)",
+         pool = GATE_ALL8, xcol = "FSC-A", ycol = "SSC-A", xcof = NA, ycof = NA, split = NULL, partial = TRUE),
+    list(id = 2, dir = "gate2_singlets", title = "Gate 2: Single cells (FSC-A vs FSC-H)",
+         pool = GATE_ALL8, xcol = "FSC-A", ycol = "FSC-H", xcof = NA, ycof = NA, split = NULL, partial = TRUE),
+    list(id = 3, dir = "gate3_CD45_CD14", title = "Gate 3: CD45+CD14- leukocytes (CD14 vs CD45)",
+         pool = GATE_ALL8, xcol = "CD14", ycol = "CD45", xcof = 150, ycof = 150, split = NULL, partial = TRUE),
+    list(id = 4, dir = "gate4_CD45_CD19", title = "Gate 4: B cells (CD19 vs CD45)",
+         pool = GATE_ALL8, xcol = "CD19", ycol = "CD45", xcof = 150, ycof = 150,
+         split = list(pos = POP_B, label = c("CD19+ (B cells)", "CD19-")), partial = FALSE),
+    list(id = 5, dir = "gate5_CD3_CD56", title = "Gate 5: NK vs T cells (CD56 vs CD3)",
+         pool = setdiff(GATE_ALL8, POP_B), xcol = "CD56", ycol = "CD3", xcof = 150, ycof = 150,
+         split = list(pos = POP_NK, label = c("CD3-CD56+ (NK cells)", "CD3+ (T cells)")), partial = FALSE),
+    list(id = 6, dir = "gate6_CD4_CD8", title = "Gate 6: CD4+ vs CD8+ T cells (CD4 vs CD8)",
+         pool = setdiff(GATE_ALL8, c(POP_B, POP_NK)), xcol = "CD4", ycol = "CD8", xcof = 150, ycof = 150,
+         split = list(pos = c(POP_NA_CD8, POP_EM_CD8, POP_TE_CD8), label = c("CD8+", "CD4+")), partial = FALSE),
+    list(id = 7, dir = "gate7_CCR7_CD45RA_CD4", title = "Gate 7: CD4+ T-cell subsets (CD45RA vs CCR7)",
+         pool = c(POP_EM_CD4, POP_NA_CD4, POP_TE_CD4), xcol = "CD45RA", ycol = "CCR7", xcof = 150, ycof = 150,
+         split = list(multi = TRUE), partial = FALSE),
+    list(id = 8, dir = "gate8_CCR7_CD45RA_CD8", title = "Gate 8: CD8+ T-cell subsets (CD45RA vs CCR7)",
+         pool = c(POP_NA_CD8, POP_EM_CD8, POP_TE_CD8), xcol = "CD45RA", ycol = "CCR7", xcof = 150, ycof = 150,
+         split = list(multi = TRUE), partial = FALSE)
+)
+
+gating_disp <- function(x, b) asinh(x / b)
+
+gating_make_plot <- function(d, gate, donor_id) {
+    sub <- d[d$donor == donor_id & d$population %in% gate$pool, ]
+    x <- sub[[gate$xcol]]; y <- sub[[gate$ycol]]
+    if (!is.na(gate$xcof)) x <- gating_disp(x, gate$xcof)
+    if (!is.na(gate$ycof)) y <- gating_disp(y, gate$ycof)
+    df <- data.frame(x = x, y = y, population = sub$population)
+
+    if (is.null(gate$split)) {
+        p <- ggplot(df, aes(x, y)) +
+            geom_hex(bins = 100) +
+            scale_fill_viridis_c(option = "turbo", trans = "log10", name = "cells")
+    } else if (isTRUE(gate$split$multi)) {
+        multi_levels <- c("Naive CD4", "EM CD4", "TEMRA CD4", "Naive CD8", "EM CD8", "TEMRA CD8")
+        df$label <- factor(gate_pop_short[df$population], levels = intersect(multi_levels, gate_pop_short))
+        p <- ggplot(df, aes(x, y, color = label)) +
+            geom_point(size = 0.15, alpha = 0.25) +
+            scale_color_brewer(palette = "Set1", name = NULL) +
+            guides(color = guide_legend(override.aes = list(size = 2, alpha = 1)))
+    } else {
+        df$label <- factor(
+            ifelse(df$population %in% gate$split$pos, gate$split$label[1], gate$split$label[2]),
+            levels = gate$split$label
+        )
+        p <- ggplot(df, aes(x, y, color = label)) +
+            geom_point(size = 0.15, alpha = 0.2) +
+            scale_color_manual(values = setNames(c("red3", "grey50"), gate$split$label), name = NULL) +
+            guides(color = guide_legend(override.aes = list(size = 2, alpha = 1)))
+    }
+
+    subtitle <- sprintf(
+        "donor%d, n = %s cells%s", donor_id, format(nrow(sub), big.mark = ","),
+        if (isTRUE(gate$partial)) " (surviving branch only -- excluded cells were not exported)" else ""
+    )
+    p + labs(title = gate$title, subtitle = subtitle,
+             x = sprintf("%s%s", gate$xcol, if (!is.na(gate$xcof)) sprintf(" (asinh/%d)", gate$xcof) else ""),
+             y = sprintf("%s%s", gate$ycol, if (!is.na(gate$ycof)) sprintf(" (asinh/%d)", gate$ycof) else "")) +
+        theme_bw(base_size = 10) +
+        theme(plot.subtitle = element_text(size = 7.5))
+}
+
+gating_fig_root <- file.path(out_dir, "figures", "gating")
+for (gate in gate_defs) {
+    gdir <- file.path(gating_fig_root, gate$dir)
+    dir.create(gdir, recursive = TRUE, showWarnings = FALSE)
+    for (donor_id in 1:7) {
+        outfile <- file.path(gdir, sprintf("donor%d.png", donor_id))
+        if (!file.exists(outfile)) {
+            p <- gating_make_plot(gating_data, gate, donor_id)
+            ggsave(outfile, p, width = 5.5, height = 4.2, dpi = 150)
+        }
+    }
+}
+cat("Gating figures written under", gating_fig_root, "\n")
+```
+
+Each gate's 7 per-donor plots are composed into a single 3-per-row contact
+sheet with `magick::image_montage()` rather than relying on knitr's
+`fig.show = "hold"` layout, which tiles reliably in HTML but not in the
+`xelatex` PDF output this document also renders to. The individual per-donor
+PNGs above remain on disk under `r file.path(out_dir, "figures", "gating")`
+for anyone who wants a single figure rather than the grid.
+
+```{r gating-figures-display, results = "asis", eval =FALSE}
+stopifnot(requireNamespace("magick", quietly = TRUE))
+for (gate in gate_defs) {
+    cat(sprintf("\n### %s\n\n", gate$title))
+    gdir <- file.path(gating_fig_root, gate$dir)
+    files <- file.path(gdir, sprintf("donor%d.png", 1:7))
+    grid_file <- file.path(gdir, "grid_3col.png")
+    if (!file.exists(grid_file)) {
+        imgs <- magick::image_read(files)
+        montage <- magick::image_montage(imgs, tile = "3x3", geometry = "x450+8+8", bg = "white")
+        magick::image_write(montage, grid_file, format = "png")
+    }
+    cat(sprintf("![%s](%s)\n\n", gate$title, grid_file))
+}
+```
+
+## Metrics
+
+Each function is documented because every number in the results flows through
+it.
+
+A fixed random subset of cells is used for the ambiguity calculation in every
+run (the full distance matrix would not fit in memory), so ambiguity values are
+comparable across configurations.
+
+```{r amb-idx}
+set.seed(99)
+amb_idx <- sort(sample(N, min(params$n_amb, N)))
+```
+
+```{r metric-functions}
+#' Adjusted Rand index between two partitions.
+#'
+#' Thin wrapper around mclust::adjustedRandIndex(). With n_ij the number of
+#' cells in cluster i of partition A and class j of partition B, the ARI is
+#'   (sum_ij C(n_ij,2) - E) / (0.5 * (sum_i C(a_i,2) + sum_j C(b_j,2)) - E),
+#' where E = sum_i C(a_i,2) * sum_j C(b_j,2) / C(n,2) is the number of agreeing
+#' pairs expected under random assignment with the same cluster sizes.
+#' Range: ~0 for chance, 1 for identical partitions, negative if worse than chance.
+#' Invariant to relabelling, so metacluster numbers need not match populations.
+ari_score <- function(a, b) mclust::adjustedRandIndex(a, b)
+
+#' Node purity: fraction of cells that belong to the majority known population
+#' of the SOM node they were mapped to. 1 = every node is pure. This is
+#' deliberately NOT adjusted for the number of nodes: it rises trivially with
+#' more nodes, so compare it only at a fixed grid size.
+node_purity <- function(node, pop) {
+    tab <- table(node, pop)
+    sum(apply(tab, 1, max)) / length(node)
+}
+
+#' Distance of every cell to every SOM code vector, for FlowSOM's `distf`.
+#'   1 = Manhattan  sum_p |x_p - c_p|
+#'   2 = Euclidean  sqrt(sum_p (x_p - c_p)^2)
+#'   3 = Chebyshev  max_p |x_p - c_p|
+#'   4 = cosine     1 - <x, c> / (||x|| ||c||)
+#' @param X cells x markers
+#' @param codes nodes x markers
+#' @return cells x nodes matrix
+node_distances <- function(X, codes, distf) {
+    n <- nrow(X); K <- nrow(codes)
+    if (distf == 4) {
+        eps <- .Machine$double.eps
+        nx <- pmax(sqrt(rowSums(X^2)), eps)
+        nc <- pmax(sqrt(rowSums(codes^2)), eps)
+        return(1 - (X / nx) %*% t(codes / nc))
+    }
+    D <- matrix(0, n, K)
+    for (j in seq_len(K)) {
+        diff <- X - rep(codes[j, ], each = n)      # column-major recycling: one value per marker
+        D[, j] <- switch(as.character(distf),
+            "1" = rowSums(abs(diff)),
+            "2" = sqrt(rowSums(diff^2)),
+            "3" = rowMaxs(abs(diff)),
+            stop("unsupported distf"))
+    }
+    D
+}
+
+#' Cluster ambiguity of cells, as in CySA's "Cluster ambiguity" tab, generalised
+#' to any of the four distances.
+#'
+#' For each cell: own = distance to the code vector of the node it was assigned
+#' to; rival = distance to the nearest *other* node. The ratio own/rival is
+#' <= 1 for a correctly assigned cell. A ratio near 1 means the node boundary
+#' does not really separate the cell from its neighbour. A cell is called
+#' "ambiguous" when the ratio exceeds 0.9. The ratio is scale-free, so the
+#' threshold means the same under rescaling of the data, but ratios of
+#' different distance functions are not strictly comparable with one another.
+#'
+#' The node assignment `node` is computed by the run engine under the SOM's
+#' training distance (see "The run engine"), so own/rival are consistent with it.
+#' @param X training matrix (cells x markers), in the space the SOM was trained in
+#' @param codes SOM code book (nodes x markers)
+#' @param node integer node assignment per cell
+#' @param idx cell subset to evaluate (memory)
+ambiguity_metrics <- function(X, codes, node, distf, idx) {
+    D <- node_distances(X[idx, , drop = FALSE], codes, distf)
+    own_j <- node[idx]
+    n <- length(idx)
+    own <- D[cbind(seq_len(n), own_j)]
+    D[cbind(seq_len(n), own_j)] <- Inf
+    rival <- rowMins(D)
+    ratio <- own / pmax(rival, .Machine$double.eps)
+    list(pct_ambiguous = 100 * mean(ratio > 0.9),
+         median_ratio = median(ratio))
+}
+
+#' FlowSOM's own consensus metaclustering of the SOM code vectors.
+#' Run inside tempdir() so any file output of ConsensusClusterPlus cannot
+#' collide between parallel workers.
+meta_cluster <- function(codes, k, seed) {
+    old <- setwd(tempdir()); on.exit(setwd(old), add = TRUE)
+    FlowSOM::metaClustering_consensus(codes, k = k, seed = seed)
+}
+
+#' Between-population variance fraction (eta^2) of every column of X:
+#' eta^2 = SS_between / SS_total. 1 = the marker is perfectly explained by
+#' population, 0 = no information about population.
+#' ORACLE: uses the known labels, so only meaningful as a diagnostic or an
+#' upper bound, never for unlabeled data.
+eta2 <- function(X, grp) {
+    gs <- rowsum(X, grp)
+    ng <- as.numeric(table(grp)[rownames(gs)])
+    gm <- gs / ng
+    mu <- colMeans(X)
+    ss_between <- colSums(ng * sweep(gm, 2, mu, "-")^2)
+    ss_total   <- colSums(X^2) - nrow(X) * mu^2
+    ss_between / ss_total
+}
+```
+
+How to read the scores, and their traps:
+
+* **ARI** depends on `k` and on the labels: the eight labels are not equally
+  separable, and the two partitions have different numbers of groups (12 vs. 8).
+  Compare ARI only at a fixed `k`.
+* **Node purity** rises with the number of nodes; compare it only at a fixed
+  grid size.
+* **Ambiguity** ratios of different distance functions are not strictly
+  comparable. Compare levels *within* one distance only.
+* **`ari_node_majority`** (computed in the run engine) labels every node with
+  its majority population and scores that. It does not involve the metaclustering
+  step, so it shows whether a change in `ari` comes from the SOM or from the
+  consensus step.
+
+**Reference value for `ari_donor`.** Donors differ in composition, so even a
+*perfect* clustering has a non-zero ARI against donor:
+
+```{r donor-floor-ref}
+donor_floor <- ari_score(pop, donor)
+cat("ARI(population, donor) =", round(donor_floor, 4), "\n")
+```
+
+`ari_donor` is therefore read against `donor_floor` = `r round(donor_floor, 3)`,
+not against 0. Values clearly *above* it indicate a clustering that splits
+populations by donor. Values *below* it are not automatically "better": they can
+also mean the population structure is lost (as at very large cofactors in stage
+0).
+
+## Diagnostics: do the markers need scaling?
+
+Before any clustering we look at the data. The diagnostics answer four
+questions, in this order, and end with concrete expectations for the factorial:
+
+1. What does the SOM actually "see": which marker gets how much weight?
+2. Are donor offsets technical (batch) or compositional (different cell mixes)?
+3. Is a marker's spread (its weight) a good proxy for its information?
+4. Where does the summary statistic used for (3), eta^2, mislead?
+
+All plots use the paper cofactors.
+
+### What the SOM sees: SD, mean and weight per marker
+
+Euclidean-type distances are translation-invariant per marker (shifting a marker
+moves all cells equally), so a marker's **mean** has no effect on clustering, but
+its **spread** (SD) sets its weight: in a squared Euclidean distance a marker
+contributes in proportion to its variance. Because arcsinh turns absolute
+differences at high intensity into fold changes, a transformed-space difference
+is already a relative difference where relative differences are meaningful. The
+spread is therefore *not* arbitrary, but it is also not guaranteed to track
+biology (it also depends on the cofactor, noise and sample composition). Steps
+2 and 3 below measure this directly.
+
+The "paper" cofactors are the reference transform for all diagnostics. They are
+also reused by the cofactor factor and by several checks later on.
+
+```{r paper-cofactors}
+spectral_cofactors <- setNames(rep(6000, length(all_m)), all_m)
+spectral_cofactors[c("CD14", "CD19", "CD3", "CD56", "CD45RA", "CD8", "CD4", "CCR7")] <-
+    c(10000, 1000, 3000, 2000, 4000, 3000, 5000, 6000)
+E_paper <- asinh(sweep(raw[, type_m], 2, spectral_cofactors[type_m], "/"))
+
+marker_ranges <- t(apply(E_paper, 2, function(v)
+    c(min = min(v), max = max(v), mean = mean(v), sd = sd(v))))
+marker_ranges <- as.data.frame(round(marker_ranges, 2))
+marker_ranges[order(-marker_ranges$sd), ]
+```
+
+The 13 type markers fall into two groups. Eight have SD between about 0.8 and
+1.6 (CD19, CD8, CD3, CD4, CD45RA, CD56, HLA-DR, CCR7). Five have SD of 0.4 or
+less (CD16, CD95, GNLY, CD14, CD103). In an unscaled SOM the first group
+carries nearly all the weight. Whether that is the right split is the question
+of the next steps.
+
+Per-donor view. The first plot shows the SD of each marker within each donor.
+
+```{r per-sample-stats}
+#' Per-group mean and SD for every column, computed with rowsum() (vectorised).
+group_stats <- function(E, group) {
+    s1 <- rowsum(E, group); s2 <- rowsum(E^2, group)
+    n  <- as.numeric(table(group)[rownames(s1)])
+    mu <- s1 / n
+    sdv <- sqrt(pmax(s2 - n * mu^2, 0) / (n - 1))
+    long <- function(M, nm) {
+        d <- as.data.frame(as.table(M), stringsAsFactors = FALSE)
+        names(d) <- c("sample_id", "marker", nm); d
+    }
+    merge(long(mu, "mean"), long(sdv, "sd"))
+}
+per_sample <- group_stats(E_paper, donor_lab)
+marker_order <- names(sort(tapply(per_sample$sd, per_sample$marker, median), decreasing = TRUE))
+per_sample$marker <- factor(per_sample$marker, levels = marker_order)
+```
+
+```{r fig-per-sample-sd, fig.width = 9}
+p <- ggplot(per_sample, aes(marker, sd)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey90") +
+    geom_jitter(aes(colour = sample_id), width = 0.15, size = 2) +
+    labs(x = "Type marker", y = "Per-sample SD", colour = "Sample",
+         title = "Per-sample SD of arcsinh-transformed expression") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+show_plot(p, "diag_per_sample_sd", 9, 5)
+```
+
+The marker ranking by SD is the same in every donor, so the weight structure is
+a property of the panel, not of individual donors. The markers with the widest
+per-donor ranges (CD19, CD8, CD56, CCR7, CD16) are the ones whose positive
+fraction varies between donors. For a bimodal marker the SD depends on the
+proportion of positive cells (it is largest at 50:50), so these ranges are
+partly a composition signal.
+
+The second plot shows the per-donor means.
+
+```{r fig-per-sample-mean, fig.width = 9}
+p <- ggplot(per_sample, aes(marker, mean)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey90") +
+    geom_jitter(aes(colour = sample_id), width = 0.15, size = 2) +
+    labs(x = "Type marker", y = "Per-sample mean", colour = "Sample",
+         title = "Per-sample mean of arcsinh-transformed expression") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+show_plot(p, "diag_per_sample_mean", 9, 5)
+```
+
+Donor offsets are each donor's mean minus the marker's mean across donors. A
+shift here is exactly what a per-donor centring (`donor_median`, `donor_z`) would
+remove.
+
+```{r fig-donor-offsets, fig.width = 9}
+per_sample$offset <- per_sample$mean - ave(per_sample$mean, per_sample$marker)
+p <- ggplot(per_sample, aes(marker, offset, colour = sample_id)) +
+    geom_hline(yintercept = 0, linewidth = 0.3) +
+    geom_jitter(width = 0.15, size = 2) +
+    labs(x = "Type marker", y = "Donor mean minus mean across donors", colour = "Sample",
+         title = "Donor offsets in mean expression (confounded with composition)") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+show_plot(p, "diag_donor_offsets", 9, 5)
+```
+
+Most offsets are within about +/-0.5 arcsinh units, but several donor means for
+bright, bimodal markers (CD3, CD45RA, CD4) sit far from the rest. The plot title
+says why this cannot be read at face value: a donor with few T cells has a low
+CD3 mean without any technical difference. The next step separates the two
+explanations.
+
+### Are the donor offsets technical or compositional?
+
+Each donor has a different mix of populations, so a shifted donor mean may
+simply mean "more T cells". The clean test is **within a known population**: for
+each population x marker, how much do the per-donor means differ? If the cell
+type is held fixed, composition cannot explain the difference. Values are in
+arcsinh units (about natural-log units for bright cells, so 0.3 is roughly a
+1.35-fold shift).
+
+```{r fig-within-pop-donor-sd, fig.width = 9, fig.height = 4.5}
+rs <- rowsum(E_paper, paste(pop, donor_lab, sep = "|"))
+mu_pd <- rs / as.numeric(table(paste(pop, donor_lab, sep = "|"))[rownames(rs)])
+pop_of_row <- sub("\\|.*", "", rownames(mu_pd))
+donor_sd <- do.call(rbind, lapply(split(seq_len(nrow(mu_pd)), pop_of_row),
+                                  function(i) apply(mu_pd[i, , drop = FALSE], 2, sd)))
+d <- as.data.frame(as.table(donor_sd), stringsAsFactors = FALSE)
+names(d) <- c("population", "marker", "sd_across_donors")
+p <- ggplot(d, aes(marker, population, fill = sd_across_donors)) +
+    geom_tile(colour = "white") +
+    geom_text(aes(label = sprintf("%.2f", sd_across_donors)), size = 2.5) +
+    scale_fill_viridis(name = "SD of donor\nmeans") +
+    labs(x = NULL, y = NULL,
+         title = "Between-donor SD of within-population means (technical offset)") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                            panel.grid = element_blank())
+show_plot(p, "diag_within_population_donor_sd", 9, 4.5)
+```
+
+```{r donor-sd-summary}
+ccr7_sd   <- donor_sd[, "CCR7"]
+other_sd  <- donor_sd[, colnames(donor_sd) != "CCR7"]
+med_other <- median(other_sd)
+```
+
+Reading the heatmap:
+
+* **CCR7 is the one channel that is elevated in every population.** Its
+  between-donor SD ranges from `r round(min(ccr7_sd), 2)` to
+  `r round(max(ccr7_sd), 2)` (median `r round(median(ccr7_sd), 2)`), against a
+  median of `r round(med_other, 2)` for all other marker x population
+  combinations. The largest values are in the naive subsets (naive CD8+:
+  `r round(donor_sd["Naive_CD8+_T_cells", "CCR7"], 2)`; naive CD4+:
+  `r round(donor_sd["Naive_CD4+_T_cells", "CCR7"], 2)`). These populations are
+  gated as CCR7+, so a shift this large *within* an already-positive population
+  cannot be composition. A channel-wide effect, rather than a population-specific
+  one, points to the measurement itself: CCR7 sits on a different fluorophore in
+  donors 5-7 (see the swap above), and donor- or batch-dependent
+  staining/titration is the other candidate.
+* **CD56 shows a population-specific pattern**, concentrated in the TEMRA
+  compartment (TEMRA CD8+: `r round(donor_sd["TEMRA_CD8+_T_cells", "CD56"], 2)`,
+  the largest value in the matrix; TEMRA CD4+:
+  `r round(donor_sd["TEMRA_CD4+_T_cells", "CD56"], 2)`). CD56 is a dim,
+  low-expression marker on T cells, so this more plausibly reflects genuine
+  donor-to-donor biological variability in CD56+ "NKT-like" content, amplified by
+  the marker's low dynamic range. This is an interpretation; the data do not
+  distinguish the two.
+* **Secondary offsets** appear for CD16 in NK cells
+  (`r round(donor_sd["NK_cells", "CD16"], 2)`) and for CD45RA in several
+  populations (for example TEMRA CD8+:
+  `r round(donor_sd["TEMRA_CD8+_T_cells", "CD45RA"], 2)`).
+* **Everything else is mostly small**: the median over the other combinations is
+  `r round(med_other, 2)`, with a handful of values between 0.35 and 0.5.
+
+The swap makes CCR7 the natural test case. If the within-population offset
+follows the fluorophore assignment, donors 5-7 should separate from donors 1-4:
+
+```{r fig-ccr7-by-donor, fig.width = 8, fig.height = 4}
+naive_rows <- grepl("^Naive_", rownames(mu_pd))
+ccr7_naive <- data.frame(
+    population = sub("\\|.*", "", rownames(mu_pd))[naive_rows],
+    donor = sub(".*\\|", "", rownames(mu_pd))[naive_rows],
+    ccr7 = mu_pd[naive_rows, "CCR7"])
+ccr7_naive$fluorophore <- ifelse(ccr7_naive$donor %in% paste0("donor", 5:7),
+                                 "donors 5-7: CCR7 on AF488", "donors 1-4: CCR7 on AF700")
+grp_mean <- tapply(ccr7_naive$ccr7, ccr7_naive$fluorophore, mean)
+p <- ggplot(ccr7_naive, aes(donor, ccr7, colour = fluorophore, shape = population)) +
+    geom_point(size = 3) +
+    labs(x = NULL, y = "Mean CCR7 (arcsinh) within the population",
+         colour = NULL, shape = NULL,
+         title = "CCR7 within naive T cells, by donor and fluorophore") +
+    theme_minimal()
+show_plot(p, "diag_ccr7_by_donor", 8, 4)
+```
+
+The group means within naive T cells are
+`r round(grp_mean[["donors 1-4: CCR7 on AF700"]], 2)` (donors 1-4, AF700) and
+`r round(grp_mean[["donors 5-7: CCR7 on AF488"]], 2)` (donors 5-7, AF488), a
+difference of
+`r round(grp_mean[["donors 5-7: CCR7 on AF488"]] - grp_mean[["donors 1-4: CCR7 on AF700"]], 2)`
+arcsinh units, to be compared with the between-donor SD above. A group
+difference of that order means the CCR7 offset is technical and tied to the
+fluorophore; a small one means it is donor-to-donor variation within each group.
+With three and four donors per group this is a check, not a test.
+
+This also fixes how the donor-based scalings should be judged later. Per-donor
+*centring* has a legitimate target only where offsets are technical, and that is
+a minority of marker x population combinations (CCR7 mainly). Everywhere else a
+donor-wise statistic carries composition.
+
+### Is a marker's SD a good proxy for its importance?
+
+Imagine the SOM is sorting cells into groups by measuring how "different" they
+look from each other, marker by marker. If one marker's numbers swing wildly
+across cells (a big spread, i.e. a high standard deviation, or SD) while another
+marker's numbers barely move, the SOM will pay far more attention to the first
+marker without being told to: it just naturally dominates the "distance"
+calculation because its values are bigger and more spread out, like one really
+loud voice in a group conversation drowning out quieter ones. The problem is that
+a marker can be loud (high SD) without being useful: it might vary a lot just
+because of staining differences between donors or machine noise, not because it
+actually distinguishes one cell type from another. Conversely, a marker can be
+quiet (low SD) but still be exactly what you need to tell two cell types apart,
+if that marker is the one thing those two types truly differ on. So SD alone
+tells you how much weight a marker gets in clustering, not whether that weight is
+earned. To check whether it is earned, you need a second measure, eta^2, that
+asks "how much of this marker's variation actually lines up with real, known
+differences between cell types?" rather than just "how much does this marker vary
+overall?"
+
+#### What is eta^2, exactly?
+
+eta^2 ("eta squared") is a number between 0 and 1 that answers one specific
+question: "if I only knew which of the 8 known cell populations a cell belongs
+to, how much of that marker's total variation could I explain just from the
+population label?" The code computes it the classic one-way-ANOVA way: split all
+the cells into their population groups, see how far each group's *average* for
+that marker is from the overall average (this is the "between-group" variation,
+the part explained by population identity), and compare that to how much the
+marker varies in total, including the spread of individual cells *within* each
+population (this is the "total" variation, which = between-group variation +
+within-group noise). eta^2 = between-group variation / total variation.
+
+* **eta^2 close to 1** means: almost all of this marker's variation is "between
+  populations". Cells within the same population have nearly the same value, but
+  different populations have very different values. That is the signature of a
+  marker that cleanly separates cell types (e.g. CD19 for B cells: B cells are
+  uniformly high, everything else is uniformly low).
+* **eta^2 close to 0** means: this marker's variation has almost nothing to do
+  with which population a cell is in. Cells scatter just as much *within* a
+  single population as they do *across* different populations. That can happen
+  for two different reasons: either the marker carries no real biological
+  information for distinguishing these populations (CD45 is the extreme case
+  of this -- high on every leukocyte, so it cannot tell populations apart --
+  which is exactly why it is excluded from the SOM features above rather than
+  merely down-weighted), or it carries
+  information the 8 fixed population labels don't capture well, for example a
+  marker that tracks a continuous, graded process like differentiation stage
+  rather than a sharp category, so cells within the same labeled population can
+  still differ a lot on it (this is closer to what is happening with CCR7).
+
+The reason eta^2 is the right partner for SD is that SD only measures "how much
+does this marker move overall", while eta^2 measures "how much of that movement
+is actually meaningful (population-aligned)" rather than noise, donor
+variability, or continuous biological drift that the discrete population labels
+don't capture. Note that eta^2 uses the labels: it is a diagnostic, never an
+input to an unsupervised pipeline.
+
+```{r marker-info}
+marker_info <- data.frame(sd = apply(E_paper, 2, sd), eta2 = eta2(E_paper, pop))
+marker_info[order(-marker_info$eta2), ]
+```
+
+To look for biological patterns in where markers fall, each marker is coloured
+by a **biological prior** defined *before* looking at the plot: its behaviour
+along the naive -> effector/memory differentiation axis. The colour must not be
+adjusted to make the pattern neat, otherwise it would only restate the plot.
+
+* `down`: lost upon differentiation (CCR7, CD45RA).
+* `up`: gained with an effector/cytotoxic/memory phenotype (CD95, CD56, GNLY,
+  HLA-DR).
+* `lineage`: subset-defining markers that are not regulated by differentiation
+  state per se (CD3, CD4, CD8, CD19, CD14, CD16, CD103). CD16 belongs here:
+  across these eight populations its main source of variance is NK cells vs.
+  everyone else, a lineage role, not a graded differentiation state.
+
+```{r fig-eta2, fig.width = 8}
+marker_info$regulation <- factor(
+    ifelse(rownames(marker_info) %in% c("CCR7", "CD45RA"), "down",
+    ifelse(rownames(marker_info) %in% c("CD95", "CD56", "GNLY", "HLA-DR"), "up",
+           "lineage")),
+    levels = c("up", "down", "lineage"))
+
+p <- ggplot(marker_info, aes(sd, eta2, label = rownames(marker_info),
+                              colour = regulation)) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed",
+                colour = "grey70") +
+    geom_point(size = 2.5) +
+    { if (requireNamespace("ggrepel", quietly = TRUE))
+          ggrepel::geom_text_repel(show.legend = FALSE)
+      else geom_text(vjust = -0.6, show.legend = FALSE) } +
+    scale_colour_manual(
+        name = "Differentiation\ndirection",
+        values = c(up = "firebrick", down = "steelblue", lineage = "grey40"),
+        labels = c(up = "Up with differentiation",
+                   down = "Down with differentiation",
+                   lineage = "Lineage marker")) +
+    labs(x = "Total SD (sets the marker's weight in the unscaled SOM distance)",
+         y = "Fraction of variance explained by known population (eta^2)",
+         title = "Marker SD vs. marker information") +
+    theme_minimal()
+show_plot(p, "diag_sd_vs_eta2", 8, 5)
+```
+
+**Reading the plot.** The dashed line is eta^2 = SD. The two axes have different
+units (a fraction vs. arcsinh units), so the line is a visual guide, not a
+calibrated target. What counts is the comparison between markers: markers with
+high eta^2 but low SD are candidates for up-weighting, and markers with high SD
+but low eta^2 are candidates for down-weighting.
+
+* **Seven markers have both high SD and high eta^2** (CD4, CD19, CD3, HLA-DR,
+  CD8, CD45RA, CD56; SD 1.0-1.6, eta^2 0.77-0.97). They fall below the dashed
+  line only because eta^2 is bounded at 1 while SD is not (a ceiling effect, not
+  a problem): they get high SOM weight *and* carry high information, which is
+  what you want.
+* **CD95 and CD16 carry more information than their modest SD suggests**
+  (SD `r round(marker_info["CD95", "sd"], 2)` and
+  `r round(marker_info["CD16", "sd"], 2)`; eta^2
+  `r round(marker_info["CD95", "eta2"], 2)` and
+  `r round(marker_info["CD16", "eta2"], 2)`). They sit above or on the line, and
+  are the natural candidates for up-weighting.
+* **CD103, CD14 and GNLY carry little information and little weight** (SD
+  0.20-0.34, eta^2 at most `r round(max(marker_info[c("CD103", "CD14", "GNLY"), "eta2"]), 2)`).
+  This is expected for CD14, a myeloid marker that is absent from these
+  lymphocyte populations (CD45 would belong in this group too -- every subset
+  is CD45+, so it cannot discriminate between them -- which is why it is
+  excluded from the SOM features entirely rather than left in to be
+  down-weighted). Their low SD keeps them quiet in the unscaled SOM. This
+  is the group that z-scoring would inflate to SD = 1, which is the basis of H1.
+* **CCR7 is the exception among the high-SD markers.** At SD
+  `r round(marker_info["CCR7", "sd"], 2)` its variance is
+  `r round(marker_info["CCR7", "sd"]^2 / marker_info["HLA-DR", "sd"]^2, 2)` times
+  that of HLA-DR, which sets its weight in a squared distance. Yet its eta^2 is
+  only `r round(marker_info["CCR7", "eta2"], 2)`, a gap that the ceiling effect
+  cannot explain. This is consistent with CCR7 being lost gradually along the
+  differentiation trajectory rather than marking a discrete population boundary.
+  It also matches the previous step: CCR7 has the largest between-donor offsets
+  within populations, so part of its within-population spread is donor noise
+  rather than biology.
+
+So CCR7 looks like the strongest candidate for scaling or down-weighting. Whether
+its weight actually *hurts* the clustering is a different question, which eta^2
+cannot answer.
+
+### A blind spot in eta^2
+
+eta^2 is a *retrospective, aggregate* statistic: it uses the true labels to ask,
+averaged across all 8 populations at once, how much of a marker's variance lines
+up with population identity. What it cannot tell you is whether that marker
+creates risk for a *specific* cell in a *specific* pairwise confusion. A marker
+can have a respectable overall eta^2, driven by the fact that it cleanly
+separates most population pairs, while still being exactly the marker that, for
+one particular cell, outweighs the correct signal from every other marker and
+pulls that cell's raw, unscaled distance closer to the wrong population's
+centroid than to its own. eta^2 averages this risk away because it is a summary
+over the whole dataset. The unscaled SOM, by contrast, makes its routing decision
+per cell, in the full multi-marker distance space, where one high-SD/low-eta^2
+marker (CCR7, say) could dominate a single cell's distance even though its
+*average* behaviour looks only moderate.
+
+The diagnostic below replaces the question "does this marker separate
+populations on average" with "for cells that would actually be mis-routed in
+unscaled distance space, which marker is responsible". For every cell it compares
+the squared distance to its own population's centroid with the distance to the
+nearest *other* centroid. A cell closer to a wrong centroid is at risk of being
+mis-routed. For those cells only, the squared-distance gap is split by marker.
+
+```{r fig-marker-pull-contamination, fig.width = 8, fig.height = 4.5}
+pop_f <- factor(pop)
+centroids <- rowsum(E_paper, pop_f) / as.numeric(table(pop_f))
+centroids <- centroids[levels(pop_f), , drop = FALSE]
+
+own_c <- centroids[as.integer(pop_f), , drop = FALSE]
+d_own <- rowSums((E_paper - own_c)^2)
+
+dist_all <- vapply(rownames(centroids), function(p) {
+    rowSums(sweep(E_paper, 2, centroids[p, ], "-")^2)
+}, numeric(nrow(E_paper)))
+dist_all[cbind(seq_len(nrow(dist_all)), as.integer(pop_f))] <- Inf
+
+nearest_wrong <- max.col(-dist_all, ties.method = "first")
+d_wrong <- dist_all[cbind(seq_len(nrow(dist_all)), nearest_wrong)]
+wrong_pop <- rownames(centroids)[nearest_wrong]
+
+misassigned <- d_wrong < d_own
+cat(sprintf("%.1f%% of cells sit closer, in raw unscaled distance, to a wrong population centroid than to their own.\n",
+            100 * mean(misassigned)))
+
+## Decompose the distance gap by marker, for misassigned cells only.
+mi <- which(misassigned)
+x        <- E_paper[mi, , drop = FALSE]
+own_mu   <- centroids[as.integer(pop_f[mi]), , drop = FALSE]
+wrong_mu <- centroids[wrong_pop[mi], , drop = FALSE]
+
+## positive = this marker pushes the cell toward the WRONG centroid
+pull <- (x - own_mu)^2 - (x - wrong_mu)^2
+pull_summary <- sort(colMeans(pull), decreasing = TRUE)
+
+d <- data.frame(marker = factor(names(pull_summary), levels = rev(names(pull_summary))),
+                pull = pull_summary)
+p <- ggplot(d, aes(pull, marker)) +
+    geom_col(fill = "firebrick") +
+    labs(x = "Mean per-marker contribution to the wrong-centroid pull\n(misassigned cells only, raw units)",
+         y = NULL,
+         title = "Which markers drive cell-level mis-routing risk") +
+    theme_minimal()
+show_plot(p, "diag_marker_pull_contamination", 8, 4.5)
+```
+
+Where those at-risk cells come from, and which populations they are pulled
+towards:
+
+```{r pull-tables}
+## share of each population's cells that is closer to a wrong centroid
+sort(round(100 * tapply(misassigned, pop_f, mean), 1), decreasing = TRUE)
+## own population (rows) vs. nearest wrong population (columns), at-risk cells only
+table(own = pop_f[mi], nearest_wrong = wrong_pop[mi])
+```
+
+**Result.** Only `r sprintf("%.1f", 100 * mean(misassigned))`% of cells lie closer
+to a wrong centroid, so the unscaled metric routes the large majority correctly.
+For the at-risk cells the pull is dominated by **CD56**
+(`r sprintf("%.2f", pull_summary[["CD56"]])`), followed by **CD8**
+(`r sprintf("%.2f", pull_summary[["CD8"]])`). **CCR7 does not drive
+mis-routing: its contribution is negative**
+(`r sprintf("%.2f", pull_summary[["CCR7"]])`), i.e. on these cells it pulls
+towards their *own* centroid. CCR7's low eta^2 therefore reflects within-population
+spread of a graded marker, not routing risk.
+
+CD56 and CD8 are high-eta^2 markers (`r round(marker_info["CD56", "eta2"], 2)` and
+`r round(marker_info["CD8", "eta2"], 2)`), so their pull comes from large
+within-population spread relative to the gap between neighbouring populations,
+exactly the situation the blind-spot paragraph describes. For CD56 this fits the
+dim, variable expression on T cells noted in the donor-offset step. The tables
+above show which population pairs are involved.
+
+Two limits apply. A nearest-centroid rule treats each population as a single
+blob, whereas some populations form a continuum (naive -> memory -> TEMRA), so it
+is a crude proxy for what a 100-node SOM does. And the diagnostic uses the
+labels, so it explains but cannot be used for correction.
+
+### What the diagnostics imply for the factors
+
+These are **expectations**, to be tested by the factorial and not conclusions.
+
+* **Unscaled data already weight roughly by information.** The markers with the
+  largest SD are, with the exception of CCR7, the markers with the highest eta^2,
+  and the markers with almost no information (CD14, GNLY, CD103) have the
+  smallest SD. Rescaling every marker to the same spread would give these noise
+  markers the same weight as CD3 or CD19. This is the reasoning behind **H1**.
+* **CCR7's weight is not the problem it first appears to be.** It combines high
+  SD, low eta^2 and the largest technical offsets, which makes it the obvious
+  candidate for down-weighting, but the cell-level diagnostic shows that it does
+  not drive mis-routing. Oracle weights (**H5**) will show how much is at stake in
+  the weights overall.
+* **Donor offsets are mostly compositional, with one technical exception.**
+  Within a population most between-donor differences are small, with CCR7 (and to
+  a lesser degree CD56) as exceptions. A donor-wise centring (`donor_median`,
+  `donor_z`) or a correction that treats each donor as a batch (cyCombine) removes
+  the technical part but also the composition signal, which is the logic behind
+  **H2** and **H4**.
+* **Spread is a property of the panel.** The SD ranking is the same in every
+  donor, so differences between scalings are not an artefact of a few donors.
+  
+
+## Implementing the factors
+
+Every cell of the factorial is the composition
+`cofactor -> (batch correction) -> scaling -> weighting -> distance`. Each factor
+below is a small function. For each one: what it does, what we expect, and what
+could make it misleading.
+
+### Factor 1: arcsinh cofactor strategies
+
+`arcsinh(x / c)` is ~linear for x << c and ~logarithmic for x >> c, so the
+cofactor `c` sets where on the raw intensity scale the switch happens. Too small:
+near-zero noise is stretched and dim populations smear. Too large: everything is
+linear and the brightest markers dominate. Stage 0 maps this out for flat
+cofactors.
+
+* `paper`: hand-tuned per-marker cofactors from Tursi et al. 2025 (eight lineage
+  markers), with 6,000 (CytoPheno's spectral default) for the other 16.
+* `flat_<value>`: one cofactor for all markers. `flat_150` is the conventional
+  flow default and is expected to do badly on spectral data (negative control);
+  `flat_6000` is the spectral default; `flat_<best>` is the best flat value from
+  stage 0 (**oracle**, chosen by mean ARI over seeds).
+* `cyet_donor`: CyEt estimates, **per donor and per marker**, the cofactor
+  `b = 1.1^k` that makes the windowed marker distribution most Gaussian
+  (Shapiro-Wilk). Fully label-free, but it optimises normality, not
+  separability, and a per-donor transform can itself create donor differences.
+  This requires `support/cyet/cyet_per_donor_resolved.rds`.
+
+  *Regenerated 2026-10-25 with CyEt 0.99.13* (up from 0.99.12), which added
+  adaptive range extension and explicit convergence status
+  (`"converged"`/`"boundary"`/`"non_convergent"`) to `optimizeBvalueVector()`.
+  Of the 168 donor x marker fits, only CD45 failed to converge (5 of 7
+  donors), and only because CD45 genuinely has no negative population in
+  this dataset to make Gaussian (see the SOM-markers section above) -- the
+  new adaptive range widening correctly exhausted itself rather than
+  fabricating a spurious optimum. Non-converged donors are resolved per
+  marker with `detect_bimodal_split()`: toward the nearest cluster's median
+  when the converged donors' own b-values split into two groups, otherwise
+  toward their pooled median (CD45's case: only 2 donors converged, so no
+  split test was possible; all 5 failed donors used the pooled median of
+  those 2, 241,557). This replaced the previous version's unconditional
+  replace-with-global-median, which is exactly the failure mode flagged in
+  `CyEt.compare`'s improvement-plan document for a training set that itself
+  splits bimodally.
+
+Cofactors are stored either as a **named vector** (one value per marker, shared
+by all donors) or as a **donors x markers matrix** (per-donor).
+
+```{r cofactors}
+cof_registry <- list(paper = spectral_cofactors)
+
+cyet_file <- "support/cyet/cyet_per_donor_resolved.rds"
+if (file.exists(cyet_file)) {
+    pdc <- readRDS(cyet_file)
+    ## donor index in that file = position of the donor in unique(sce$donor), i.e. donor1..donor7
+    cyet_mat <- matrix(NA_real_, 7, length(all_m), dimnames = list(1:7, all_m))
+    cyet_mat[cbind(pdc$donor, match(pdc$marker, all_m))] <- pdc$b_resolved
+    stopifnot(!anyNA(cyet_mat))
+    cof_registry$cyet_donor <- cyet_mat
+} else {
+    message("No CyEt file at ", cyet_file, "; the cyet_donor cofactor set is skipped.")
+}
+
+#' Canonical name for a flat cofactor set, never in scientific notation.
+flat_name <- function(x) paste0("flat_", format(x, scientific = FALSE, trim = TRUE))
+
+#' Resolve a cofactor-set name to a named vector (global) or donors x markers matrix.
+#' Names of the form "flat_<number>" are created on the fly.
+get_cofactors <- function(name) {
+    if (!is.null(cof_registry[[name]])) return(cof_registry[[name]])
+    if (grepl("^flat_[0-9.]+(e[+-]?[0-9]+)?$", name)) {   # also tolerate "flat_1e+05"
+        return(setNames(rep(as.numeric(sub("^flat_", "", name)), length(all_m)), all_m))
+    }
+    stop("unknown cofactor set: ", name)
+}
+
+#' arcsinh-transform the raw matrix (cells x 24) with a cofactor set.
+#' Per-donor matrices are applied donor by donor.
+transform_raw <- function(cof) {
+    out <- raw
+    if (is.matrix(cof)) {
+        for (d in sort(unique(donor))) {
+            j <- which(donor == d)
+            out[j, ] <- asinh(sweep(raw[j, , drop = FALSE], 2, cof[as.character(d), all_m], "/"))
+        }
+    } else {
+        out <- asinh(sweep(raw, 2, cof[all_m], "/"))
+    }
+    out
+}
+```
+
+### Factor 2: batch correction (cyCombine)
+
+cyCombine (Pedersen et al. 2022) first clusters cells with a small internal SOM
+(8x8) and then runs `sva::ComBat` **within each cluster**, so the correction does
+not remove between-population differences that are unevenly spread across
+batches. Here each donor is a batch. The correction runs on all 24 markers after
+the cofactor transform, and the result is cached per cofactor set (it is the most
+expensive step: allow tens of minutes per set on 725,000 cells).
+
+Two caveats shape how the result should be read. "Donor = batch" assumes donors
+differ technically, not in composition, but the within-population heatmap showed
+that most offsets are small. And ComBat is fitted per cluster, so rare
+donor x cluster combinations (some donor x population cells have only a few
+dozen events, see the table in Data) get unreliable corrections.
+
+```{r cycombine}
+#' cyCombine-corrected, arcsinh-transformed matrix (cells x 24) for a cofactor set.
+#' Cached on disk; the (slow) correction only runs if the cache file is missing.
+correct_cycombine <- function(cf) {
+    path <- file.path(out_dir, "cycombine", paste0("cc_", cf, ".rds"))
+    if (file.exists(path)) return(readRDS(path))
+    message("[cyCombine] correcting cofactor set '", cf, "' (slow) ...")
+    df <- as.data.frame(transform_raw(get_cofactors(cf)))
+    df$batch <- donor_lab
+    df$id <- seq_len(nrow(df))
+    set.seed(1234)
+    cc <- cyCombine::batch_correct(
+        df, markers = all_m, label = NULL,       # label = NULL: cyCombine builds its own internal SOM
+        xdim = 8, ydim = 8, seed = 1234,
+        norm_method = "scale", method = "ComBat") # "scale" only feeds the grouping SOM
+    cc <- as.data.frame(cc)
+    cc <- cc[order(cc$id), ]
+    out <- as.matrix(cc[, all_m]); rownames(out) <- NULL
+    save_rds_atomic(out, path)
+    out
+}
+
+#' Cells x type-marker matrix after cofactor transform (+ optional cyCombine).
+get_base <- function(cf, batch) {
+    tr <- if (batch == "cyCombine") correct_cycombine(cf) else transform_raw(get_cofactors(cf))
+    tr[, type_m, drop = FALSE]
+}
+```
+
+### Factor 3: scaling
+
+All methods act on the 13 type markers, after cofactor transform and batch
+correction. Centring is irrelevant for Manhattan, Euclidean and Chebyshev, so the
+**centering part** only matters for cosine; the **scale part** matters for all
+four distances.
+
+| Method | Definition | What it changes | Main risk |
+|---|---|---|---|
+| `none` | x | reference | CCR7-like high-SD markers carry large weight |
+| `center_global` | x - mean | nothing for L1/L2/L-inf (**invariance test**); the origin for cosine | none |
+| `donor_median` | x - median of that donor | removes per-donor additive offsets (= multiplicative gain in raw intensity); spread untouched | the median of a bimodal marker depends on the donor's population mix, so it can inject composition |
+| `alpha0.5` | (x - mean) / sd^0.5 | partial equalisation of spread (alpha = 0 none, 1 = z-score) | mild |
+| `zscore` | (x - mean) / sd | all markers SD = 1 | inflates low-SD (often noise) markers |
+| `robust_z` | (x - median) / MAD | like z-score, outlier-robust | inflates even more for markers with most cells near zero (tiny MAD) |
+| `pct_range` | (x - q01) / (q99 - q01) | CATALYST's heatmap scaling, 1st-99th percentile to 0-1 | milder than z-score: for Gaussian noise q99 - q01 is ~4.65 SD |
+| `donor_z` | per-donor median centering, then divide by the global SD | donor alignment + equalised spread | both risks above |
+
+```{r scaling}
+#' Subtract a per-donor statistic (e.g. column medians) from every donor's cells.
+center_by_donor <- function(X, fun = matrixStats::colMedians) {
+    for (d in unique(donor)) {
+        j <- which(donor == d)
+        X[j, ] <- sweep(X[j, , drop = FALSE], 2, fun(X[j, , drop = FALSE]), "-")
+    }
+    X
+}
+
+#' Apply a scaling method (see table above) to a cells x markers matrix.
+apply_scaling <- function(X, how) {
+    switch(how,
+        none          = X,
+        center_global = sweep(X, 2, colMeans(X), "-"),
+        donor_median  = center_by_donor(X),
+        alpha0.5      = sweep(sweep(X, 2, colMeans(X), "-"), 2, colSds(X)^0.5, "/"),
+        zscore        = sweep(sweep(X, 2, colMeans(X), "-"), 2, colSds(X), "/"),
+        robust_z      = sweep(sweep(X, 2, colMedians(X), "-"), 2,
+                              pmax(colMads(X), 1e-8), "/"),
+        pct_range     = { q <- colQuantiles(X, probs = c(0.01, 0.99))
+                          sweep(sweep(X, 2, q[, 1], "-"), 2, q[, 2] - q[, 1], "/") },
+        donor_z       = { Xc <- center_by_donor(X); sweep(Xc, 2, colSds(Xc), "/") },
+        stop("unknown scaling: ", how))
+}
+```
+
+### Factor 4: marker weights
+
+`sqrt_eta2` multiplies every marker by the square root of its between-population
+variance fraction (so its *variance* is scaled by eta^2). It uses the labels,
+hence it is an **oracle**: an upper bound on what any weighting could achieve,
+not a method for unlabeled data.
+
+`FlowSOM::SOM()` also has an `importance` argument. For the Euclidean case,
+pre-multiplying columns is mathematically equivalent, and it keeps the data and
+the code book in the same space for the ambiguity calculation. The check below
+tests this for Euclidean.
+
+```{r weights}
+apply_weights <- function(X, how) {
+    if (how == "none") return(X)
+    if (how == "sqrt_eta2") return(sweep(X, 2, sqrt(eta2(X, pop)), "*"))
+    stop("unknown weighting: ", how)
+}
+
+prepare_X <- function(Xbase, scaling, weighting) {
+    apply_weights(apply_scaling(Xbase, scaling), weighting)
+}
+```
+
+```{r importance-check}
+importance_check <- cached("01_importance_check.rds", {
+    set.seed(1)
+    ii <- sort(sample(N, min(50000, N)))
+    Xs <- E_paper[ii, ]
+    w  <- sqrt(eta2(Xs, droplevels(pop[ii])))
+    set.seed(7); som_imp <- FlowSOM::SOM(Xs, xdim = 10, ydim = 10, importance = w, silent = TRUE)
+    set.seed(7); som_pre <- FlowSOM::SOM(sweep(Xs, 2, w, "*"), xdim = 10, ydim = 10, silent = TRUE)
+    node <- as.integer(som_imp$mapping[, 1])
+    occ <- sort(unique(node))
+    node_mean <- function(M) rowsum(M, node) / as.numeric(table(node)[as.character(occ)])
+    rmse <- function(a, b) sqrt(mean((a - b)^2))
+    data.frame(
+        rmse_codes_vs_unweighted_node_means = rmse(som_imp$codes[occ, ], node_mean(Xs)),
+        rmse_codes_vs_weighted_node_means   = rmse(som_imp$codes[occ, ], node_mean(sweep(Xs, 2, w, "*"))),
+        ari_nodes_importance_vs_premultiplied =
+            ari_score(node, as.integer(som_pre$mapping[, 1])))
+})
+importance_check
+```
+
+The code book is much closer to the *weighted* node means (RMSE
+`r signif(importance_check[[2]], 3)`) than to the unweighted ones
+(`r signif(importance_check[[1]], 3)`), and the node assignments of the two runs
+agree (ARI = `r signif(importance_check[[3]], 3)`). For Euclidean,
+pre-multiplication is therefore a safe stand-in for `importance=`. For the other
+three distances it simply *defines* the weighted distance; it was not compared
+against `importance=`.
+
+### Factor 5: distance function inside the SOM
+
+| `distf` | Distance | Notes |
+|---|---|---|
+| 1 | Manhattan | less dominated by a single large marker difference than Euclidean |
+| 2 | Euclidean | FlowSOM / CATALYST default |
+| 3 | Chebyshev | only the single largest marker difference counts |
+| 4 | cosine | compares **direction**, ignores the overall magnitude of a cell's profile; origin-dependent, so centering and scaling can matter here, unlike for the other three |
+
+The SOM's metaclustering step (`metaClustering_consensus`) always uses Euclidean
+hierarchical clustering on the code vectors, regardless of `distf`. Learning rate
+and radius use FlowSOM's defaults for all four distances. Non-Euclidean runs are
+therefore best read as exploratory. Finally, the engine below assigns cells to
+nodes **itself**, under the training distance, instead of trusting
+`som$mapping`; the engine checks show why.
+
+## The run engine
+
+`run_one()` performs a single configuration: prepare the matrix, train the SOM
+with `FlowSOM::SOM()` directly, assign every cell to its nearest code vector
+under the training distance (`assign_nodes()`), consensus-metacluster the code
+vectors into `k` groups, map back to cells, and score. Each run writes its own
+result file; `run_stage()` skips runs whose file exists and groups the remaining
+runs by (cofactor, batch) so each expensive base matrix is built only once and
+then shared (forked, copy-on-write) with the parallel workers.
+
+Besides `ari` (metaclusters vs. population), every run records `ari_node_majority`:
+the ARI obtained if every SOM node is labelled with its majority population. It
+does not depend on the metaclustering step, so it separates SOM quality from
+metaclustering luck.
+
+```{r engine}
+cfg_cols  <- c("cofactor", "batch", "scaling", "weighting", "distf")
+run_cols  <- c(cfg_cols, "seed", "xdim", "k")
+n_seeds   <- if (is.null(params$n_seeds)) 5L else as.integer(params$n_seeds)
+seeds_all <- 1234L + seq_len(n_seeds) - 1L
+
+run_key <- function(g) {
+    gsub("[^A-Za-z0-9_.-]", "_", paste(g$cofactor, g$batch, g$scaling, g$weighting,
+        paste0("d", g$distf), paste0("s", g$seed), paste0("g", g$xdim), paste0("k", g$k),
+        sep = "__"))
+}
+
+#' Nearest SOM node for every cell under distance `distf`, in chunks (memory).
+#' Euclidean uses the cross-product identity (only the arg-min is needed).
+assign_nodes <- function(X, codes, distf, chunk = 50000L) {
+    n <- nrow(X); node <- integer(n)
+    for (s in seq(1L, n, by = chunk)) {
+        i  <- s:min(s + chunk - 1L, n)
+        Xi <- X[i, , drop = FALSE]
+        D <- if (distf == 2) {
+            outer(rowSums(Xi^2), rowSums(codes^2), "+") - 2 * tcrossprod(Xi, codes)
+        } else node_distances(Xi, codes, distf)
+        node[i] <- max.col(-D, ties.method = "first")
+    }
+    node
+}
+
+#' Run one configuration.
+#' @param Xbase cells x type-markers after cofactor (+ cyCombine)
+#' @param cfg one-row data.frame with the columns in `run_cols`
+#' @return one-row data.frame: configuration + metrics (see Overview).
+#'   `pct_mapping_agree` = agreement of FlowSOM's own `mapping` with our assignment.
+#'   Errors are caught and reported in the `error` column instead of aborting the stage.
+run_one <- function(Xbase, cfg) {
+    t0 <- proc.time()[["elapsed"]]
+    out <- data.frame(cfg[, run_cols], ari = NA_real_, ari_node_majority = NA_real_,
+        ari_donor = NA_real_, node_purity = NA_real_, pct_ambiguous = NA_real_,
+        median_ratio = NA_real_, pct_mapping_agree = NA_real_, n_empty_nodes = NA_integer_,
+        runtime_s = NA_real_, error = NA_character_, stringsAsFactors = FALSE)
+    rownames(out) <- NULL
+    tryCatch({
+        X <- prepare_X(Xbase, cfg$scaling, cfg$weighting)
+        set.seed(cfg$seed)
+        som <- FlowSOM::SOM(X, xdim = cfg$xdim, ydim = cfg$xdim, rlen = 10, mst = 1,
+                            distf = cfg$distf, silent = TRUE)
+        stopifnot(!is.null(som$mapping))
+        node <- assign_nodes(X, som$codes, cfg$distf)
+        meta <- meta_cluster(som$codes, cfg$k, cfg$seed)
+        cl   <- meta[node]
+        maj  <- apply(table(node, pop), 1, which.max)       # majority population per node
+        out$ari               <- ari_score(cl, pop)
+        out$ari_node_majority <- ari_score(maj[as.character(node)], as.integer(pop))
+        out$ari_donor         <- ari_score(cl, donor)
+        out$node_purity       <- node_purity(node, pop)
+        out$n_empty_nodes     <- nrow(som$codes) - length(unique(node))
+        amb <- ambiguity_metrics(X, som$codes, node, cfg$distf, amb_idx)
+        out$pct_ambiguous     <- amb$pct_ambiguous
+        out$median_ratio      <- amb$median_ratio
+        out$pct_mapping_agree <- 100 * mean(as.integer(som$mapping[, 1]) == node)
+    }, error = function(e) out$error <<- conditionMessage(e))
+    out$runtime_s <- proc.time()[["elapsed"]] - t0
+    out
+}
+
+#' Run (or resume) a stage. Returns all runs of `grid`, cached or fresh.
+run_stage <- function(grid, stage) {
+    stopifnot(all(run_cols %in% names(grid)))
+    dir <- file.path(out_dir, "runs", stage)
+    dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+    grid$file <- file.path(dir, paste0(run_key(grid), ".rds"))
+    todo <- which(!file.exists(grid$file))
+    message(sprintf("[%s] %d runs: %d cached, %d to compute (%d core(s))",
+        stage, nrow(grid), nrow(grid) - length(todo), length(todo), n_cores))
+    groups <- split(todo, paste(grid$cofactor[todo], grid$batch[todo], sep = "||"))
+    for (g in names(groups)) {
+        rows <- groups[[g]]
+        message(sprintf("[%s] base matrix '%s': %d runs", stage, g, length(rows)))
+        Xbase <- get_base(grid$cofactor[rows[1]], grid$batch[rows[1]])
+        worker <- function(i) {
+            res <- run_one(Xbase, grid[i, ])
+            save_rds_atomic(res, grid$file[i])
+            invisible(NULL)
+        }
+        invisible(parallel::mclapply(rows, worker, mc.cores = n_cores, mc.preschedule = FALSE))
+        rm(Xbase); invisible(gc())
+    }
+    res <- lapply(grid$file, function(f) if (file.exists(f)) readRDS(f) else NULL)
+    if (any(vapply(res, is.null, NA))) {
+        warning(sum(vapply(res, is.null, NA)), " run(s) produced no result file ",
+                "(worker died, e.g. out of memory). Re-run the chunk to retry them.")
+    }
+    res <- do.call(rbind, res)
+    res$distance <- factor(dist_labels[as.character(res$distf)],
+                           levels = unname(dist_labels)[c(2, 1, 3, 4)])
+    rownames(res) <- NULL
+    res
+}
+```
+
+## Engine checks (before any stage)
+
+Two cheap, deterministic checks on a 20,000-cell subsample. They isolate the
+*mathematics* from the *training noise* that the full runs add.
+
+1. **Translation invariance (H0).** Assign cells to nodes with the original and
+   the globally centred data (and centred code book). For Manhattan, Euclidean
+   and Chebyshev the assignment must be identical (up to exact ties); for cosine
+   it should not be.
+2. **Which distance does `som$mapping` use?** Compare FlowSOM's own node mapping
+   for a SOM trained with each `distf` against our nearest-node assignment under
+   (a) the training distance and (b) Euclidean.
+
+```{r engine-checks}
+engine_checks <- cached("01_engine_checks_v2.rds", local({
+    set.seed(2)
+    ii <- sort(sample(N, min(20000, N)))
+    Xs <- E_paper[ii, ]
+    mu <- colMeans(Xs)
+    do.call(rbind, lapply(1:4, function(d) {
+        set.seed(11)
+        som <- FlowSOM::SOM(Xs, xdim = 10, ydim = 10, rlen = 10, mst = 1, distf = d, silent = TRUE)
+        som_node <- as.integer(som$mapping[, 1])
+        own <- assign_nodes(Xs, som$codes, d)
+        euc <- assign_nodes(Xs, som$codes, 2)
+        ctr <- assign_nodes(sweep(Xs, 2, mu, "-"), sweep(som$codes, 2, mu, "-"), d)
+        data.frame(distance = dist_labels[[as.character(d)]],
+                   translation_invariant_pct            = 100 * mean(own == ctr),
+                   som_mapping_matches_own_distance_pct = 100 * mean(som_node == own),
+                   som_mapping_matches_euclidean_pct    = 100 * mean(som_node == euc))
+    }))
+}))
+knitr::kable(engine_checks, digits = 2, format = "pipe")
+```
+
+How to read it:
+
+* `translation_invariant_pct` must be ~100 for Manhattan, Euclidean and
+  Chebyshev (H0 as a mathematical fact) and may be lower for cosine.
+* If `som_mapping_matches_euclidean_pct` is ~100 for **all** distances while
+  `som_mapping_matches_own_distance_pct` is not, then `FlowSOM::SOM()` returns a
+  Euclidean `mapping` whatever `distf` was used for training. In that case
+  `som$mapping` must not be used for non-Euclidean runs: ARI, purity and
+  ambiguity would then compare cells and nodes under *different* metrics. This is
+  why `run_one()` assigns nodes itself. The column `pct_mapping_agree` in every
+  run records how much the two disagree.
+
+**Reference value for `ari_donor`.** Donors differ in composition, so even a
+*perfect* clustering has a non-zero ARI against donor:
+
+## Stage 0: flat cofactor sweep
+
+Thirteen flat cofactors, otherwise the baseline (no batch correction, no scaling,
+no weights, Euclidean), each with `r n_seeds` seeds (SOM training is stochastic).
+The mean over seeds defines the oracle `flat_<best>`.
+
+```{r stage0}
+cofactor_grid <- c(50, 100, 150, 250, 500, 1000, 2000, 3000, 6000, 10000, 20000, 50000, 100000)
+stage0_grid <- merge(
+    data.frame(cofactor = flat_name(cofactor_grid), batch = "none", scaling = "none",
+               weighting = "none", distf = 2, xdim = 10, k = 12, stringsAsFactors = FALSE),
+    data.frame(seed = seeds_all), by = NULL)
+stage0_raw <- cached("10_stage0_v2.rds", run_stage(stage0_grid, "stage0_v2"))
+stage0_raw$cofactor_value <- as.numeric(sub("^flat_", "", stage0_raw$cofactor))
+
+stage0 <- aggregate(cbind(ari, ari_node_majority, ari_donor, node_purity, pct_ambiguous) ~
+                        cofactor_value, stage0_raw, mean)
+stage0$ari_sd <- aggregate(ari ~ cofactor_value, stage0_raw, sd)$ari
+best_cf <- stage0$cofactor_value[which.max(stage0$ari)]
+sd_best <- stage0$ari_sd[which.max(stage0$ari)]; sd_best[is.na(sd_best)] <- 0
+plateau <- range(stage0$cofactor_value[stage0$ari >= max(stage0$ari) - max(2 * sd_best, 0.01)])
+stage0
+```
+
+```{r fig-stage0, fig.width = 8, fig.height = 7}
+m_donor <- "ARI vs. donor (dotted = floor of a perfect clustering)"
+long0 <- rbind(
+    data.frame(cofactor_value = stage0_raw$cofactor_value, metric = "ARI vs. known population", value = stage0_raw$ari),
+    data.frame(cofactor_value = stage0_raw$cofactor_value, metric = "Ambiguous cells (%)", value = stage0_raw$pct_ambiguous),
+    data.frame(cofactor_value = stage0_raw$cofactor_value, metric = m_donor, value = stage0_raw$ari_donor))
+p <- ggplot(long0, aes(cofactor_value, value)) +
+    annotate("rect", xmin = 1000, xmax = 10000, ymin = -Inf, ymax = Inf, fill = "#2a9d8f", alpha = 0.08) +
+    geom_vline(xintercept = 150, colour = "#dc3545", linetype = "dashed") +
+    geom_vline(xintercept = 6000, colour = "#264653", linetype = "dashed") +
+    geom_hline(data = data.frame(metric = m_donor, y = donor_floor), aes(yintercept = y), linetype = "dotted") +
+    geom_point(colour = "grey60", alpha = 0.6, size = 1.4) +
+    stat_summary(fun = mean, geom = "line", colour = "grey30") +
+    stat_summary(fun = mean, geom = "point", size = 2.5, colour = "#264653") +
+    scale_x_log10(breaks = cofactor_grid, labels = scales::label_number(big.mark = ",")) +
+    facet_wrap(~metric, scales = "free_y", ncol = 1) +
+    labs(x = "Flat arcsinh cofactor (log scale)", y = NULL,
+         title = "Stage 0: flat cofactor sweep (FlowSOM::SOM, Euclidean)",
+         subtitle = "Grey: single seeds; dark: mean. Shaded: paper's per-marker range. Red: 150. Dark dashed: 6,000.") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+show_plot(p, "stage0_flat_cofactor_sweep", 8, 7)
+```
+
+The best flat cofactor is **`r best_cf`** (mean ARI `r round(max(stage0$ari), 3)`).
+All flat values from `r plateau[1]` to `r plateau[2]` lie within two seed-SDs
+(minimum 0.01) of it. The flat 6,000 fallback scores
+`r round(stage0$ari[stage0$cofactor_value == 6000], 3)` and 150 scores
+`r round(stage0$ari[stage0$cofactor_value == 150], 3)`.
+
+How to read this: the ARI curve is a plateau with steep walls. At small cofactors
+arcsinh is logarithmic over the whole range and noise around zero is stretched;
+at very large cofactors it is linear and the brightest markers dominate. Between
+the walls, the exact value hardly matters. That is a prior for the later result
+on `paper` (per-marker) vs. flat cofactors. The ambiguity curve is not monotone
+with ARI: it peaks inside the plateau, so a better partition can come with more
+ambiguous raw nodes. `ari_donor` falls at the largest cofactors only because the
+population structure is lost there (compare with the dotted floor).
+
+## Stage 1: the full factorial
+
+```{r stage1-grid}
+cof_names <- unique(c("paper", "flat_150", "flat_6000", flat_name(best_cf),
+                      if ("cyet_donor" %in% names(cof_registry)) "cyet_donor"))
+
+## cyCombine is slow: apply it to the label-free, sensible cofactor sets only
+## (not to the flat_150 negative control).
+cc_sets <- setdiff(cof_names, "flat_150")
+
+combos <- data.frame(cofactor = cof_names, batch = "none", stringsAsFactors = FALSE)
+if (have_cycombine) {
+    combos <- rbind(combos, data.frame(cofactor = cc_sets, batch = "cyCombine", stringsAsFactors = FALSE))
+}
+scalings   <- c("none", "center_global", "donor_median", "alpha0.5", "zscore", "robust_z", "pct_range", "donor_z")
+stage1_grid <- merge(combos,
+    expand.grid(scaling = scalings, weighting = c("none", "sqrt_eta2"), distf = c(2, 1, 3, 4),
+                stringsAsFactors = FALSE), by = NULL)
+stage1_grid$seed <- 1234; stage1_grid$xdim <- 10; stage1_grid$k <- 12
+cat(nrow(stage1_grid), "stage-1 runs:", nrow(combos), "(cofactor x batch) base matrices x",
+    length(scalings), "scalings x 2 weightings x 4 distances\n")
+```
+
+### Gating scheme after each cofactor transform, for every cofactor strategy
+
+The same 8-panel gating scheme recreated earlier (per donor, in the Data
+section) is repeated here **after the arcsinh transform**, once per entry in
+`cof_names` -- i.e. exactly the cofactor strategies this factorial actually
+tests (`r paste(cof_names, collapse = ", ")`), so this stays in sync with
+whatever `cof_names` resolves to automatically.
+
+Gates 1-2 (the FSC-A/SSC-A lymphocyte and FSC-A/FSC-H singlet gates) are
+**not** repeated here: FSC/SSC are scatter channels, never part of the
+arcsinh cofactor transform (`all_m` is fluorescence markers only), so those
+two panels are identical for every cofactor strategy -- see the versions
+already generated above. Only gates 3-8, which plot transformed fluorescence
+channels, can actually change with the cofactor choice.
+
+This reuses `raw`/`pop`/`donor`/`all_m` from the Data section and
+`get_cofactors()`/`transform_raw()` from "Factor 1" above directly, rather
+than re-reading the FCS files -- the transformed matrix for a cofactor set is
+exactly what `get_base(cf, "none")` would hand to the clustering stages,
+just not yet restricted to `type_m`.
+
+```{r gating-figures-by-method-defs}
+gate_defs_post_transform <- Filter(function(g) g$id >= 3, gate_defs)
+
+#' Same plot as gating_make_plot(), but reading x/y directly from an
+#' already-transformed cells x markers matrix (no extra display cofactor --
+#' `tr` is already asinh(raw / cofactor_set)).
+gating_make_plot_transformed <- function(tr, gate, donor_id, method_label) {
+    keep <- donor == donor_id & pop %in% gate$pool
+    df <- data.frame(x = tr[keep, gate$xcol], y = tr[keep, gate$ycol], population = pop[keep])
+
+    if (is.null(gate$split)) {
+        p <- ggplot(df, aes(x, y)) +
+            geom_hex(bins = 100) +
+            scale_fill_viridis_c(option = "turbo", trans = "log10", name = "cells")
+    } else if (isTRUE(gate$split$multi)) {
+        multi_levels <- c("Naive CD4", "EM CD4", "TEMRA CD4", "Naive CD8", "EM CD8", "TEMRA CD8")
+        df$label <- factor(gate_pop_short[as.character(df$population)],
+                            levels = intersect(multi_levels, gate_pop_short))
+        p <- ggplot(df, aes(x, y, color = label)) +
+            geom_point(size = 0.15, alpha = 0.25) +
+            scale_color_brewer(palette = "Set1", name = NULL) +
+            guides(color = guide_legend(override.aes = list(size = 2, alpha = 1)))
+    } else {
+        df$label <- factor(
+            ifelse(as.character(df$population) %in% gate$split$pos, gate$split$label[1], gate$split$label[2]),
+            levels = gate$split$label
+        )
+        p <- ggplot(df, aes(x, y, color = label)) +
+            geom_point(size = 0.15, alpha = 0.2) +
+            scale_color_manual(values = setNames(c("red3", "grey50"), gate$split$label), name = NULL) +
+            guides(color = guide_legend(override.aes = list(size = 2, alpha = 1)))
+    }
+
+    p + labs(title = sprintf("%s -- %s", gate$title, method_label),
+             subtitle = sprintf("donor%d, n = %s cells", donor_id, format(sum(keep), big.mark = ",")),
+             x = sprintf("%s (transformed)", gate$xcol), y = sprintf("%s (transformed)", gate$ycol)) +
+        theme_bw(base_size = 10) +
+        theme(plot.subtitle = element_text(size = 7.5))
+}
+
+gating_by_method_root <- file.path(out_dir, "figures", "gating_by_method")
+for (cf in cof_names) {
+    tr <- transform_raw(get_cofactors(cf))
+    for (gate in gate_defs_post_transform) {
+        gdir <- file.path(gating_by_method_root, cf, gate$dir)
+        dir.create(gdir, recursive = TRUE, showWarnings = FALSE)
+        grid_file <- file.path(gdir, "grid_3col.png")
+        if (!file.exists(grid_file)) {
+            files <- character(7)
+            for (donor_id in 1:7) {
+                outfile <- file.path(gdir, sprintf("donor%d.png", donor_id))
+                p <- gating_make_plot_transformed(tr, gate, donor_id, cf)
+                ggsave(outfile, p, width = 5.5, height = 4.2, dpi = 150)
+                files[donor_id] <- outfile
+            }
+            imgs <- magick::image_read(files)
+            montage <- magick::image_montage(imgs, tile = "3x3", geometry = "x450+8+8", bg = "white")
+            magick::image_write(montage, grid_file, format = "png")
+        }
+    }
+    rm(tr); gc(FALSE)
+}
+cat("Post-transform gating figures written under", gating_by_method_root, "\n")
+```
+
+```{r gating-figures-by-method-display, results = "asis"}
+for (gate in gate_defs_post_transform) {
+    cat(sprintf("\n#### %s\n\n", gate$title))
+    for (cf in cof_names) {
+        grid_file <- file.path(gating_by_method_root, cf, gate$dir, "grid_3col.png")
+        cat(sprintf("\n##### %s\n\n", cf))
+        cat(sprintf("![%s -- %s](%s)\n\n", gate$title, cf, grid_file))
+    }
+}
+```
+
+Stage 1 is a **screen with one seed**: it generates hypotheses, stages 2 and 3
+test them. Assigning nodes ourselves costs some time per run (roughly 15-30 s);
+the stage can be interrupted and resumed because finished runs are skipped.
+
+```{r stage1}
+stage1 <- cached("11_stage1_v2.rds", run_stage(stage1_grid, "stage1_v2"))
+cat(sum(!is.na(stage1$error)), "failed runs;", "total compute", round(sum(stage1$runtime_s) / 3600, 2), "h\n")
+if (any(!is.na(stage1$error))) print(table(stage1$error))
+s <- stage1[!is.na(stage1$ari), ]
+```
+
+### How much can a single run resolve? The noise floor
+
+`center_global` and `none` are **mathematically identical** for Manhattan,
+Euclidean and Chebyshev (H0), and the engine check confirmed this for the node
+assignment. Each such pair therefore measures pure run-to-run noise: same seed,
+same initial cells, same data up to a shift. Any ARI difference within a pair is
+noise.
+
+```{r noise-floor}
+a <- stage1[stage1$scaling == "none", ]
+b <- stage1[stage1$scaling == "center_global", ]
+twins <- merge(a, b, by = c("cofactor", "batch", "weighting", "distf", "distance"),
+               suffixes = c("_none", "_ctr"))
+twins$delta_ari <- twins$ari_ctr - twins$ari_none
+
+noise_tab <- do.call(rbind, lapply(split(twins, twins$distance), function(d)
+    data.frame(distance = d$distance[1], n_pairs = nrow(d),
+               pct_identical = 100 * mean(abs(d$delta_ari) < 1e-9),
+               median_abs = median(abs(d$delta_ari)),
+               p95_abs = unname(quantile(abs(d$delta_ari), 0.95)),
+               max_abs = max(abs(d$delta_ari)))))
+rownames(noise_tab) <- NULL
+noise_band <- unname(quantile(abs(twins$delta_ari[twins$distf != 4]), 0.95))
+noise_tab
+aggregate(pct_mapping_agree ~ distance, stage1, min)
+```
+
+For the three translation-invariant distances, `r round(mean(abs(twins$delta_ari[twins$distf != 4]) < 1e-9) * 100)`%
+of the twin pairs are bit-identical, but the others differ by up to
+`r round(max(abs(twins$delta_ari[twins$distf != 4])), 3)` ARI. The most likely
+reason is that online SOM training is chaotic: a floating-point difference can
+flip one nearest-node decision, the trajectories diverge, and the consensus step
+may then merge a different pair of populations. H0 is therefore **true as
+mathematics but not testable to better than the noise band** of
+`r round(noise_band, 3)` (95th percentile of |dARI| over the exact twins).
+
+Consequences for everything below:
+
+* single-run differences smaller than the noise band are not interpreted;
+* every factor effect is shown as a **paired difference** (same setting except
+  the factor) against that band;
+* the marginal means of the earlier version are dropped because they averaged
+  over an unbalanced design (`flat_150` has no cyCombine arm);
+* `pct_mapping_agree` (table above) says how far FlowSOM's own `mapping` departs
+  from our node assignment for each distance.
+
+### Factor effects, paired and against the noise floor
+
+For each factor, every configuration is paired with the same configuration at the
+reference level (scaling: `none`; cofactor: `paper`; batch: `none`; weighting:
+`none`; distance: `euclidean`), and the difference in ARI is recorded.
+
+```{r paired-effects}
+paired_effect <- function(d, f, ref) {
+    cfg_f <- if (f == "distance") "distf" else f
+    key <- setdiff(cfg_cols, cfg_f)
+    lev <- as.character(d[[f]])
+    r <- d[lev == ref, c(key, "ari")]; names(r)[names(r) == "ari"] <- "ari_ref"
+    o <- d[lev != ref, c(key, f, "ari")]
+    m <- merge(o, r, by = key)
+    data.frame(factor = f, level = as.character(m[[f]]), delta = m$ari - m$ari_ref)
+}
+effects <- rbind(paired_effect(s, "scaling", "none"),
+                 paired_effect(s, "cofactor", "paper"),
+                 paired_effect(s, "batch", "none"),
+                 paired_effect(s, "weighting", "none"),
+                 paired_effect(s, "distance", "euclidean"))
+
+effect_tab <- do.call(rbind, lapply(split(effects, list(effects$factor, effects$level), drop = TRUE),
+    function(d) data.frame(factor = d$factor[1], level = d$level[1], n_pairs = nrow(d),
+                           mean_delta = mean(d$delta), median_delta = median(d$delta),
+                           pct_better_than_noise = 100 * mean(d$delta > noise_band),
+                           pct_worse_than_noise  = 100 * mean(d$delta < -noise_band))))
+effect_tab <- effect_tab[order(effect_tab$factor, -effect_tab$mean_delta), ]
+rownames(effect_tab) <- NULL
+eff <- function(f, l) { v <- effect_tab$mean_delta[effect_tab$factor == f & effect_tab$level == l]
+                        if (length(v)) v else NA_real_ }
+effect_tab
+```
+
+```{r fig-effects, fig.width = 9, fig.height = 6}
+p <- ggplot(effects, aes(reorder(level, delta, median), delta)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -noise_band, ymax = noise_band,
+             fill = "grey80", alpha = 0.5) +
+    geom_hline(yintercept = 0, linewidth = 0.3) +
+    geom_boxplot(outlier.size = 0.7, fill = "white") + coord_flip() +
+    facet_wrap(~factor, scales = "free_y") +
+    labs(x = NULL, y = "Paired change in ARI vs. the reference level",
+         title = "Stage 1: effect of each factor level (grey band = noise floor)") +
+    theme_minimal()
+show_plot(p, "stage1_paired_effects", 9, 6)
+```
+
+Reading the figure (written against the first complete run; re-check after
+re-running):
+
+* **Scaling is the factor that matters.** `none`, `center_global`, `alpha0.5`
+  and `pct_range` are indistinguishable (mean paired change within the grey
+  band; `pct_range` `r sprintf("%+.3f", eff("scaling", "pct_range"))`). Full
+  equalisation hurts: `zscore` `r sprintf("%+.3f", eff("scaling", "zscore"))`,
+  `robust_z` `r sprintf("%+.3f", eff("scaling", "robust_z"))`. H1 is therefore
+  only partly right: dividing by the SD hurts, but `pct_range` does not. It uses
+  the 1st-99th percentile range, which for noise-only markers is about 4.65 SD,
+  so it inflates them much less than a z-score does.
+* **Donor-based scaling hurts** (`donor_median`
+  `r sprintf("%+.3f", eff("scaling", "donor_median"))`, `donor_z`
+  `r sprintf("%+.3f", eff("scaling", "donor_z"))`) and, for `donor_median`, raises
+  donor leakage (below). The median of a bimodal marker such as CD3, CD19 or CD56
+  is set by the donor's population mix, so centring on it moves T-rich and
+  B/NK-rich donors in opposite directions and injects composition instead of
+  removing a technical offset. This agrees with the within-population heatmap,
+  where most donor offsets are small.
+* **Cofactor.** The per-donor CyEt cofactor is the only cofactor strategy that
+  is clearly worse than `paper` (`r sprintf("%+.3f", eff("cofactor", "cyet_donor"))`).
+  The flat cofactors are within or near the band, consistent with the stage-0
+  plateau.
+* **Batch.** cyCombine moves ARI by `r sprintf("%+.3f", eff("batch", "cyCombine"))`
+  on average, small relative to the band.
+* **Weighting.** The oracle weights give `r sprintf("%+.3f", eff("weighting", "sqrt_eta2"))`
+  on average, but see the top lists: the gain comes from rescuing poor scalings,
+  not from improving good ones.
+* **Distance.** Differences between distances are within the band (see ANOVA).
+
+### How the variance splits
+
+Share of the variance in ARI attributable to each factor (sequential sum of
+squares; the design is slightly unbalanced because `flat_150` has no cyCombine
+arm, so treat it as a rough ranking, not as an exact decomposition):
+
+```{r stage1-anova}
+fit <- lm(ari ~ cofactor + batch + scaling + weighting + distance +
+              scaling:distance + weighting:distance + cofactor:batch, data = stage1)
+an <- anova(fit)
+an$pct_of_total_SS <- round(100 * an[["Sum Sq"]] / sum(an[["Sum Sq"]]), 1)
+an[, c("Df", "Sum Sq", "pct_of_total_SS")]
+```
+
+Scaling takes `r an["scaling", "pct_of_total_SS"]`% of the sum of squares and the
+residual `r an["Residuals", "pct_of_total_SS"]`%. The residual is not pure noise
+(interactions not in the model, such as cofactor x scaling, end up there), but
+the twin analysis shows that run-to-run noise alone can reach the size of many
+"effects". `scaling:distance` (`r an["scaling:distance", "pct_of_total_SS"]`%)
+is tiny compared with `scaling`: scaling acts the same way for all four
+distances, which is relevant for H3.
+
+### The full ARI map
+
+```{r heatmap-fun}
+heat <- function(w) {
+    d <- stage1[stage1$weighting == w, ]
+    d$setup <- paste(d$cofactor, d$batch, sep = " | ")
+    ggplot(d, aes(scaling, setup, fill = ari)) +
+        geom_tile(colour = "white") +
+        geom_text(aes(label = sprintf("%.2f", ari)), size = 2.2) +
+        scale_fill_viridis(limits = c(0, 1), na.value = "grey80", name = "ARI") +
+        facet_wrap(~distance, nrow = 1) +
+        labs(x = "Scaling", y = "Cofactor | batch correction",
+             title = paste0("Stage 1: ARI of every pipeline, weighting = ", w, " (seed 1234)")) +
+        theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.grid = element_blank())
+}
+```
+
+```{r fig-stage1-heatmap-none, fig.width = 12, fig.height = 4.5}
+show_plot(heat("none"), "stage1_ari_heatmap_unweighted", 12, 4.5)
+```
+
+```{r fig-stage1-heatmap-oracle, fig.width = 12, fig.height = 4.5}
+show_plot(heat("sqrt_eta2"), "stage1_ari_heatmap_oracle", 12, 4.5)
+```
+
+### Accuracy vs. ambiguity (within each distance only)
+
+Ambiguity ratios of different distance functions are not strictly comparable,
+and the node assignment of non-Euclidean runs was questionable in the first
+version. The panels are therefore free-scaled per distance; compare points
+**within** a panel only, never the ambiguity level between panels (cosine's low
+ambiguity is in particular not evidence for cosine).
+
+```{r fig-stage1-tradeoff, fig.width = 10, fig.height = 4}
+p <- ggplot(stage1, aes(pct_ambiguous, ari, colour = weighting)) +
+    geom_point(alpha = 0.6, size = 1.8) +
+    scale_colour_manual(values = c(none = "#264653", sqrt_eta2 = "#dc3545")) +
+    facet_wrap(~distance, scales = "free_x", nrow = 1) +
+    labs(x = "Ambiguous cells (%)", y = "ARI vs. known population",
+         title = "Stage 1: accuracy vs. ambiguity (per distance)") + theme_minimal()
+show_plot(p, "stage1_ari_vs_ambiguity", 10, 4)
+```
+
+### Donor leakage, read against the floor
+
+The dashed line is `donor_floor`, the `ari_donor` of a perfect clustering.
+
+```{r fig-stage1-donor, fig.width = 9, fig.height = 4.5}
+p <- ggplot(stage1, aes(scaling, ari_donor, fill = batch)) +
+    geom_hline(yintercept = donor_floor, linetype = "dashed") +
+    geom_boxplot(outlier.size = 0.7) + facet_wrap(~distance, nrow = 1) +
+    scale_fill_viridis_d(begin = 0.2, end = 0.8) +
+    labs(x = "Scaling", y = "ARI vs. donor", title = "Stage 1: donor leakage (dashed: perfect-clustering floor)") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+show_plot(p, "stage1_donor_leakage", 9, 4.5)
+```
+
+The best configurations sit on the floor (leakage = composition only).
+`donor_median` and `cyet_donor` lie clearly above it, so they add donor
+structure. cyCombine tends to sit at or below the floor, which is expected if it
+removes donor structure, but it may also remove composition (see the cautions at
+the end).
+
+### Leaders
+
+```{r stage1-top}
+show_cols <- c(cfg_cols, "distance", "ari", "ari_node_majority", "ari_donor", "node_purity", "pct_ambiguous")
+lf  <- stage1[stage1$weighting == "none" & !is.na(stage1$ari), ]
+orc <- stage1[stage1$weighting != "none" & !is.na(stage1$ari), ]
+head(lf[order(-lf$ari), show_cols], 15)
+head(orc[order(-orc$ari), show_cols], 10)
+anchor <- stage1[stage1$cofactor == "paper" & stage1$batch == "none" & stage1$scaling == "none" &
+                 stage1$weighting == "none" & stage1$distf == 2, show_cols]
+anchor
+n_tied <- sum(lf$ari >= max(lf$ari) - noise_band)
+```
+
+`r n_tied` label-free configurations lie within the noise band
+(`r round(noise_band, 3)`) of the best one, so the "winner" is not distinguished
+from the pack. What the leaders have in common is more informative than their
+order: which cofactor, whether any batch correction or donor-based scaling is
+present, and which scalings appear. The `anchor` row (paper cofactors, nothing
+else, Euclidean) is the reference. It is not guaranteed to match the headline
+ARI of the earlier vignette, because that one used CATALYST's `cluster()` with
+ConsensusClusterPlus, while this one uses `SOM()` plus FlowSOM's
+`metaClustering_consensus()`. Compare rows within this document.
+
+## Stage 2: do the finalists survive other seeds?
+
+Finalists: the anchor, the top `r top_k` label-free configurations, the best
+label-free configuration **per distance function**, and the top 3 oracle-weighted
+configurations. For every finalist that has an exact twin (`none` vs.
+`center_global`, non-cosine), the twin is added too: two mathematically identical
+runs must agree, so their gap measures noise inside the final comparison. Each is
+re-run with the seeds after the first (`r paste(seeds_all[-1], collapse = ", ")`;
+seed 1234 is from stage 1).
+
+```{r stage2}
+best_by_dist <- do.call(rbind, lapply(split(lf, lf$distf), function(d) d[which.max(d$ari), ]))
+fin <- unique(rbind(
+    stage1[stage1$cofactor == "paper" & stage1$batch == "none" & stage1$scaling == "none" &
+           stage1$weighting == "none" & stage1$distf == 2, ],
+    head(lf[order(-lf$ari), ], top_k),
+    best_by_dist,
+    head(orc[order(-orc$ari), ], 3))[, cfg_cols])
+twin_of <- c(none = "center_global", center_global = "none")
+tw <- fin[fin$scaling %in% names(twin_of) & fin$distf != 4, ]
+tw$scaling <- unname(twin_of[tw$scaling])
+finalists <- unique(rbind(fin, tw)); rownames(finalists) <- NULL
+cat(nrow(finalists), "finalists\n")
+
+stage2_grid <- merge(finalists, data.frame(seed = seeds_all[-1]), by = NULL)
+stage2_grid$xdim <- 10; stage2_grid$k <- 12
+stage2 <- cached("12_stage2_v2.rds", run_stage(stage2_grid, "stage2_v2"))
+
+reps <- merge(rbind(stage1[, names(stage2)], stage2), finalists, by = cfg_cols)   # finalists only
+reps$config <- do.call(paste, c(reps[cfg_cols[1:4]], list(reps$distance), sep = " | "))
+stage2_summary <- do.call(rbind, lapply(split(reps, reps$config), function(d)
+    data.frame(config = d$config[1], weighting = d$weighting[1], n_seeds = nrow(d),
+               ari_mean = mean(d$ari), ari_sd = sd(d$ari),
+               ari_min = min(d$ari), ari_max = max(d$ari),
+               node_majority_mean = mean(d$ari_node_majority),
+               ambiguous_mean = mean(d$pct_ambiguous), donor_ari_mean = mean(d$ari_donor))))
+stage2_summary <- stage2_summary[order(-stage2_summary$ari_mean), ]
+rownames(stage2_summary) <- NULL
+## "tied" = not distinguishable from the best config (difference < 2 standard errors)
+stage2_summary$tied_with_best <- with(stage2_summary,
+    (ari_mean[1] - ari_mean) <= 2 * sqrt((ari_sd / sqrt(n_seeds))^2 + (ari_sd[1] / sqrt(n_seeds[1]))^2))
+stage2_summary <- cached("13_stage2_summary_v2.rds", stage2_summary)
+stage2_summary
+```
+
+**Twin check inside stage 2.** These pairs are mathematically identical, so
+any gap in mean ARI, and any gap in seed SD, is noise:
+
+```{r stage2-twins}
+reps_tw <- reps[reps$scaling %in% names(twin_of) & reps$distf != 4, ]
+tw_mean <- aggregate(ari ~ cofactor + batch + weighting + distance + scaling, reps_tw, mean)
+tw_sd   <- aggregate(ari ~ cofactor + batch + weighting + distance + scaling, reps_tw, sd)
+names(tw_sd)[names(tw_sd) == "ari"] <- "sd"
+tw_all  <- merge(tw_mean, tw_sd)
+tw_wide <- reshape(tw_all, idvar = c("cofactor", "batch", "weighting", "distance"),
+                   timevar = "scaling", direction = "wide")
+tw_wide <- tw_wide[complete.cases(tw_wide), ]
+tw_wide$mean_gap <- tw_wide$ari.center_global - tw_wide$ari.none
+tw_wide
+```
+
+```{r fig-stage2, fig.width = 9, fig.height = 5.5}
+lev <- stage2_summary$config[order(stage2_summary$ari_mean)]
+stage2_summary$config_f <- factor(stage2_summary$config, lev)
+reps$config_f <- factor(reps$config, lev)
+p <- ggplot(stage2_summary, aes(config_f, ari_mean, colour = weighting)) +
+    geom_point(data = reps, aes(config_f, ari), colour = "grey65", alpha = 0.7, size = 1.2, inherit.aes = FALSE) +
+    geom_pointrange(aes(ymin = ari_mean - ari_sd, ymax = ari_mean + ari_sd)) +
+    coord_flip() + scale_colour_manual(values = c(none = "#264653", sqrt_eta2 = "#dc3545")) +
+    labs(x = NULL, y = paste0("ARI (mean +/- SD over ", n_seeds, " seeds; grey: single seeds)"),
+         title = "Stage 2: finalists across seeds (red = oracle weights)") +
+    theme_minimal() + theme(axis.text.y = element_text(size = 7))
+show_plot(p, "stage2_finalists_seeds", 9, 5.5)
+```
+
+How to read it:
+
+* **Do not read the order of the table as a ranking.** Differences between
+  configurations that are smaller than their seed-to-seed SD should not be
+  interpreted. `r sum(stage2_summary$tied_with_best)` of
+  `r nrow(stage2_summary)` finalists are statistically tied with the top one.
+* **The twin pairs are the calibration.** If two mathematically identical
+  configurations differ in mean ARI or in seed SD (table above), that difference
+  is what chance alone does at this number of seeds. A small seed SD for one twin
+  and a large one for the other is not a property of the scaling: the
+  distribution of outcomes is bimodal (the consensus step either merges a pair
+  of populations or not), and with few seeds one twin can simply have escaped the
+  bad outcome.
+* `node_majority_mean` does not depend on metaclustering. If it is nearly
+  identical across finalists while `ari_mean` varies, the variation comes from
+  the metaclustering step, not from the preprocessing.
+
+## Stage 3: does the ranking transfer to other grid sizes and k?
+
+Finalists are re-run (first `r min(3L, n_seeds)` seeds) at 5x5 and 15x15 grids
+with `k` = 12, and at 10x10 with `k` = 8 (the true number of populations) and
+`k` = 16. If the ranking holds, the winner is not tuned to a single grid or
+number of metaclusters.
+
+```{r stage3}
+seeds_s3 <- seeds_all[seq_len(min(3L, n_seeds))]
+variants <- data.frame(xdim = c(5, 15, 10, 10), k = c(12, 12, 8, 16))
+stage3_grid <- merge(merge(finalists, data.frame(seed = seeds_s3), by = NULL), variants, by = NULL)
+stage3 <- cached("14_stage3_v2.rds", run_stage(stage3_grid, "stage3_v2"))
+
+base10 <- merge(rbind(stage1[, names(stage3)], stage2), finalists, by = cfg_cols)   # 10x10, k=12 reference
+base10 <- base10[base10$seed %in% seeds_s3, ]
+conf <- rbind(base10, stage3)
+conf$config  <- do.call(paste, c(conf[cfg_cols[1:4]], list(conf$distance), sep = " | "))
+conf$variant <- sprintf("grid %dx%d, k=%d", conf$xdim, conf$xdim, conf$k)
+var_levels <- c("grid 5x5, k=12", "grid 10x10, k=8", "grid 10x10, k=12", "grid 10x10, k=16", "grid 15x15, k=12")
+conf$variant <- factor(conf$variant, levels = var_levels)
+
+conf_mean <- aggregate(ari ~ config + variant + weighting, conf, mean)
+conf_wide <- reshape(conf_mean[, c("config", "variant", "ari")], idvar = "config",
+                     timevar = "variant", direction = "wide")
+names(conf_wide) <- sub("^ari\\.", "", names(conf_wide))
+conf_wide <- conf_wide[, c("config", intersect(var_levels, names(conf_wide)))]
+ref_name  <- "grid 10x10, k=12"
+conf_wide <- cached("15_stage3_summary_v2.rds", conf_wide[order(-conf_wide[[ref_name]]), ])
+conf_wide
+
+variant_best <- do.call(rbind, lapply(setdiff(names(conf_wide), "config"), function(v) {
+    x <- conf_wide[[v]]
+    data.frame(variant = v, best_config = conf_wide$config[which.max(x)],
+               best_ari = max(x), median_ari = median(x), worst_ari = min(x))
+}))
+variant_best
+```
+
+Spearman correlation of the stage-1/2 ranking with the ranking at other
+settings. Because the finalists differ by less than the noise band at 10x10, low
+correlations are *expected*, so this is only a sanity number. The table above
+(spread across finalists per variant) is the more informative result:
+
+```{r stage3-rank}
+ref <- conf_wide[[ref_name]]
+sapply(setdiff(names(conf_wide), c("config", ref_name)),
+       function(v) suppressWarnings(cor(ref, conf_wide[[v]], method = "spearman", use = "complete.obs")))
+```
+
+```{r fig-stage3, fig.width = 9, fig.height = 5}
+p <- ggplot(conf_mean, aes(variant, ari, group = config,
+                           colour = ifelse(weighting == "none", "label-free", "oracle"))) +
+    geom_line(alpha = 0.6) + geom_point() +
+    scale_colour_manual(values = c(`label-free` = "#264653", oracle = "#dc3545"), name = NULL) +
+    labs(x = NULL, y = "ARI (mean over seeds)", title = "Stage 3: finalists at other grid sizes and k") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 25, hjust = 1))
+show_plot(p, "stage3_grid_k_confirmation", 9, 5)
+```
+
+**Why does `k` = 8 hurt?** It is the true number of populations but not
+necessarily the best `k`. The contingency table of the anchor shows which
+populations the consensus step merges or splits at `k` = 8:
+
+```{r k8-diagnostic}
+k8_table <- cached("16_k8_contingency_v2.rds", local({
+    X <- prepare_X(get_base("paper", "none"), "none", "none")
+    set.seed(1234)
+    som  <- FlowSOM::SOM(X, xdim = 10, ydim = 10, rlen = 10, mst = 1, distf = 2, silent = TRUE)
+    node <- assign_nodes(X, som$codes, 2)
+    mc   <- meta_cluster(som$codes, 8, 1234)[node]
+    table(metacluster = mc, population = pop)
+}), csv = FALSE)
+k8_table
+```
+
+Read the table row by row: a metacluster spread over several populations is a
+merge; a population spread over several rows is a split. The labelled
+populations are very unequal in size and the CD4/CD8 T-cell subsets form a
+continuum along CCR7/CD45RA, so 8 groups need not coincide with the 8 labels. A
+drop in ARI at `k` = 8 is thus a statement about the labels and the
+metaclustering step, not necessarily about the preprocessing. Note that stage 3
+now uses several seeds, because with one seed a bimodal outcome (merge or no
+merge) would look like a systematic difference between configurations.
+
+## Verdict: the questions and hypotheses
+
+The evidence column is computed; the verdict column was written after inspecting
+the first complete run and must be re-checked if numbers change after a re-run.
+
+```{r verdict}
+best_lf <- lf[which.max(lf$ari), ]
+best_or <- orc[which.max(orc$ari), ]
+tw_abs  <- tapply(abs(twins$delta_ari), twins$distance, mean)
+verdict <- data.frame(
+    hypothesis = c("H0", "H1", "H2", "H3", "H4", "H5"),
+    evidence = c(
+        sprintf("Node assignment translation-invariant for %.2f%% of cells (L1/L2/Linf); end-to-end |dARI| of exact twins: median %.3f, 95th pct %.3f, max %.3f.",
+                min(engine_checks$translation_invariant_pct[engine_checks$distance != "cosine"]),
+                median(abs(twins$delta_ari[twins$distf != 4])), noise_band,
+                max(abs(twins$delta_ari[twins$distf != 4]))),
+        sprintf("Paired dARI vs none: zscore %+.3f, robust_z %+.3f, pct_range %+.3f.",
+                eff("scaling", "zscore"), eff("scaling", "robust_z"), eff("scaling", "pct_range")),
+        sprintf("donor_median: dARI %+.3f, mean ari_donor %.3f vs floor %.3f.",
+                eff("scaling", "donor_median"),
+                mean(s$ari_donor[s$scaling == "donor_median"]), donor_floor),
+        sprintf("Mean |dARI| from centring by distance: %s. scaling:distance = %.1f%% of SS vs scaling = %.1f%%.",
+                paste(names(tw_abs), round(tw_abs, 3), collapse = ", "),
+                an["scaling:distance", "pct_of_total_SS"], an["scaling", "pct_of_total_SS"]),
+        sprintf("Paired dARI: cyet_donor %+.3f (mean ari_donor %.3f), cyCombine %+.3f; best label-free config uses batch = %s.",
+                eff("cofactor", "cyet_donor"), mean(s$ari_donor[s$cofactor == "cyet_donor"]),
+                eff("batch", "cyCombine"), best_lf$batch),
+        sprintf("Best oracle ARI %.4f vs best label-free %.4f (difference %+.4f, noise band %.3f); mean paired gain of sqrt_eta2 %+.3f.",
+                best_or$ari, best_lf$ari, best_or$ari - best_lf$ari, noise_band, eff("weighting", "sqrt_eta2"))),
+    verdict = c(
+        "Holds as mathematics (invariance check). End-to-end it can only be tested to the noise band, because SOM training amplifies floating-point differences.",
+        "Partly supported: z-score and robust z-score hurt; pct_range does not (its 1-99% range is a milder equalisation).",
+        "Rejected: donor-based scalings lower ARI and, for donor_median, raise donor leakage. The offsets are mostly compositional.",
+        "Not supported at the available resolution: cosine is not more affected by centring than the exact twins are by noise, and scaling acts alike across distances.",
+        "Supported for per-donor CyEt (worse, more leakage). cyCombine does not improve on the best uncorrected pipelines.",
+        "No headroom: the oracle weights do not beat the best label-free pipeline beyond noise. They mostly rescue poor scalings."),
+    stringsAsFactors = FALSE)
+knitr::kable(verdict, format = "pipe")
+```
+
+Answers to the five questions of the Overview:
+
+1. **Cofactor.** Any flat cofactor on the plateau (`r plateau[1]`-`r plateau[2]`)
+   performs like the hand-tuned per-marker `paper` set. A per-donor,
+   normality-driven cofactor (CyEt) is the one strategy that is clearly worse and
+   leaks donor structure.
+2. **Batch correction.** Donor = batch is not a good model here: donors differ in
+   composition, and the best pipelines are all uncorrected. cyCombine is neither
+   clearly harmful nor helpful in paired comparisons.
+3. **Scaling.** The decision that matters most. No scaling, global centring,
+   `alpha0.5` and `pct_range` are equivalent; full equalisation (z-score, robust
+   z-score) and donor-based scalings hurt.
+4. **Weighting.** Oracle weights add nothing to a good pipeline, so there is no
+   room for an unsupervised weighting scheme to gain much on this dataset.
+5. **Distance.** Euclidean, Manhattan and Chebyshev are equivalent within noise.
+   Cosine is competitive, but its ambiguity values are not comparable with the
+   others.
+
+Things to keep in mind when interpreting:
+
+* **Noise first.** Single-run differences below `r round(noise_band, 3)` ARI are not
+  interpretable. Use paired effects, stage 2 and stage 3, not the single top
+  cell.
+* **Selection bias.** The best of hundreds of pipelines, scored on the same labels
+  it is selected on, is optimistic.
+* **Oracle options** (`flat_<best>`, `sqrt_eta2`) show what is achievable with
+  label knowledge. They are not recommendations for unlabeled data.
+* **Donor and population are crossed here** (every donor has all 8 populations),
+  but with very different cell counts. Corrections that equalise donors
+  (cyCombine, `donor_median`, `donor_z`) can remove real composition signal as
+  well as technical offsets. Compare `ari_donor` with `donor_floor`, and use the
+  within-population donor-SD heatmap as the evidence to weigh against ARI.
+* **Non-Euclidean distances** use FlowSOM's default learning schedule and
+  Euclidean metaclustering, and their node assignment is our own (see the engine
+  checks), so they are exploratory.
+* **ARI depends on `k` and on the labels.** The 8 labels are not equally
+  separable, so ARI differences at a fixed `k` partly reflect the metaclustering
+  step.
+* Extensions that fit the same engine: add a pooled CyEt vector to `cof_registry`
+  (a named numeric vector of 24 cofactors), add unsupervised marker weights (e.g.
+  bimodality-based) to `apply_weights()`, add other scalings to
+  `apply_scaling()`, or test whether the CCR7 donor offsets follow the fluorophore
+  swap (donors 1-4 vs 5-7).
+
+## Output manifest and session information
+
+```{r manifest}
+files <- list.files(out_dir, recursive = TRUE)
+files <- files[!grepl("^runs/", files)]
+data.frame(file = files,
+           size_MB = round(file.size(file.path(out_dir, files)) / 1e6, 2))
+cat(length(list.files(file.path(out_dir, "runs"), recursive = TRUE)),
+    "individual run files in", file.path(out_dir, "runs"), "\n")
+
+cached("00_config_v2.rds", list(params = params, n_cores = n_cores, N = N, type_markers = type_m,
+    cofactor_sets = cof_names, cycombine_sets = if (have_cycombine) cc_sets else NULL,
+    scalings = scalings, best_flat_cofactor = best_cf, n_seeds = n_seeds,
+    donor_floor = donor_floor, noise_band = noise_band, date = Sys.time()),
+    csv = FALSE) -> cfg_saved
+
+si_file <- file.path(out_dir, "99_session_info.txt")
+if (!file.exists(si_file)) writeLines(capture.output(sessionInfo()), si_file)
+sessionInfo()
+```
