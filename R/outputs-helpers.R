@@ -115,6 +115,70 @@
         plotly::event_register("plotly_relayout")
 }
 
+#' Plot Coordinates of a Clicked Ridge Cell and Its SOM Node
+#'
+#' Locates a cell clicked in the ridge plot on the active axes of the main
+#' SOM 2D plot: the cell's own values, the id of its SOM node and the node's
+#' coordinates. A node coordinate is the SOM code when the axis marker is a
+#' SOM column, and the per-node mean of the cells assigned to that node
+#' otherwise (the value \code{plotSOMScatter()} plots in that case); it is
+#' \code{NA} when the node cannot be resolved.
+#'
+#' @param sce A \code{SingleCellExperiment}; the first assay supplies the
+#'   cell values.
+#' @param somCodes SOM codes matrix (nodes x markers).
+#' @param cell Integer column index of the clicked cell, or \code{NULL}.
+#' @param dims Character length 2: the active axes (markers).
+#'
+#' @return A one-row data frame with \code{x}, \code{y} (the cell's values),
+#'   \code{nodeX}, \code{nodeY} (the node's coordinates) and \code{node}
+#'   (the node id); \code{NULL} when there is no cell or the markers are
+#'   unknown.
+#'
+#' @keywords internal
+.ridgeHighlightPoints <- function(sce, somCodes, cell, dims) {
+    if (is.null(cell) || length(cell) == 0L ||
+        !all(dims %in% rownames(sce))) {
+        return(NULL)
+    }
+    cell <- cell[1L]
+    if (is.null(rownames(somCodes))) {
+        rownames(somCodes) <- as.character(seq_len(nrow(somCodes)))
+    }
+    cd <- SummarizedExperiment::colData(sce)
+    node <- if (is.null(cd$cluster_id)) NA_character_ else
+        as.character(cd$cluster_id[cell])
+    if (!is.na(node) && !node %in% rownames(somCodes)) {
+        node <- NA_character_
+    }
+    nodePos <- if (is.na(node)) NA_integer_ else
+        match(node, rownames(somCodes))
+    cid <- as.character(cd$cluster_id)
+    nodeCoord <- function(dim) {
+        if (!is.na(nodePos) && dim %in% colnames(somCodes)) {
+            return(as.numeric(somCodes[nodePos, dim]))
+        }
+        # No code column: plotSOMScatter plots the per-node cell mean.
+        if (is.na(node)) {
+            return(NA_real_)
+        }
+        vals <- SummarizedExperiment::assays(sce)[[1]][dim, cid == node]
+        if (length(vals) == 0L) {
+            return(NA_real_)
+        }
+        mean(vals)
+    }
+    vals <- SummarizedExperiment::assays(sce)[[1]][dims, cell, drop = TRUE]
+    data.frame(
+        x = unname(as.numeric(vals[1L])),
+        y = unname(as.numeric(vals[2L])),
+        nodeX = nodeCoord(dims[1L]),
+        nodeY = nodeCoord(dims[2L]),
+        node = node,
+        stringsAsFactors = FALSE
+    )
+}
+
 #' Main SOM 2D Plot of the Active Axis Pair
 #'
 #' @param st Server state environment.
@@ -136,6 +200,13 @@
     dims <- dimSel[[1L]]$dims
     pctl <- input$scatterPercentile %||% 0.99
     somCodes <- st$metaD[[st$somCodesName]]
+    # The cell clicked in the ridge plot is highlighted in the plain view.
+    cell <- if (!is.null(st$ridgeServer)) st$ridgeServer$ridgeCell() else NULL
+    cellHighlight <- if (!is.null(cell)) {
+        .ridgeHighlightPoints(st$sce, somCodes, cell, dims)
+    } else {
+        NULL
+    }
     somPlot(
         st$somBasePlot(), 1L, rs, colorbyGroups, showGroups,
         dimSelection = dimSel, sce = st$sce, metaD = st$metaD,
@@ -144,6 +215,7 @@
             st$somProjectionDf()
         },
         agreement = if (isTRUE(nnAgreement)) st$nnAgreement(),
+        cellHighlight = cellHighlight,
         xlim = .quantileLimits(somCodes, dims[1L], pctl),
         ylim = .quantileLimits(somCodes, dims[2L], pctl),
         source = "somDataMain"

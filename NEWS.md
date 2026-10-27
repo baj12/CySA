@@ -1,3 +1,22 @@
+# CySA 0.99.40
+
+## New features
+
+- The ridge plot now sits directly above the SOM 2D plots, and clicking an
+  outlier dot in the ridge plot steers the main 2D plot to that dot's
+  marker: when the marker is not already shown, the first preset pair that
+  contains it is activated (keeping the pair's own orientation), otherwise
+  the marker is placed on the x axis with the first other marker from the
+  marker list on the y axis. The clicked cell is then highlighted in the
+  main 2D plot as a black diamond at its raw values on the active axes,
+  together with a ring around its SOM node and a dashed connector between
+  the two (in the plain, non-projection view) -- so outlier cells identified
+  in the ridge plot can be located in the node-level 2D plot without
+  manually cross-referencing axes. Click payloads that carry no marker
+  (e.g. the bare-cell overlay trace, or an empty event) are ignored without
+  error, and the highlight degrades gracefully when a marker has no SOM
+  code column.
+
 # CySA 0.99.39
 
 ## New features

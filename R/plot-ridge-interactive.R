@@ -581,7 +581,7 @@ plotRidgeInteractive <- function(sce, markers, rs, coverage = 0.99,
         if (nrow(d) == 0L) next
         p <- p %>% plotly::add_trace(
             type = "scatter", mode = "markers",
-            x = d$x, y = d$y, customdata = d$cell,
+            x = d$x, y = d$y, customdata = paste(d$marker, d$cell, sep = "\x1f"),
             text = d$txt, hoverinfo = "text",
             name = paste("outlier,", if (high) "above band" else "below band"),
             marker = list(size = 8,

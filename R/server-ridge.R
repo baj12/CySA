@@ -42,10 +42,11 @@
         {
             d <- .safeEventData("plotly_click", source = "ridgePlot",
                 verbose = verbose)
-            if (is.null(d) || nrow(d) == 0L || is.null(d$customdata)) {
+            click <- .parseRidgeClick(d)
+            if (is.null(click)) {
                 return(NULL)
             }
-            ridgeCell(as.integer(d$customdata[1]))
+            ridgeCell(click$cell)
         }
     )
 
@@ -67,6 +68,60 @@
     )
 
     invisible(list(ridgePlot = ridgePlot, ridgeCell = ridgeCell))
+}
+
+#' Parse a Ridge Plot Click Payload
+#'
+#' Outlier dots carry \code{"<marker>\x1f<cell>"} in \code{customdata} so a
+#' click names both the cell and the ridge row it came from. The "clicked
+#' cell" overlay trace carries a bare cell index (no marker). Payloads
+#' shaped as a data frame (the usual plotly event), a bare atomic value or
+#' a point-object list are all accepted; anything else parses to
+#' \code{NULL}.
+#'
+#' @param d Event data from \code{.safeEventData("plotly_click", ...)},
+#'   which may be a data frame, a point-object list or an atomic value, or
+#'   \code{NULL}.
+#'
+#' @return A list with \code{marker} (\code{NULL} when absent) and
+#'   \code{cell} (integer column index into \code{sce}), or \code{NULL}.
+#'
+#' @keywords internal
+.parseRidgeClick <- function(d) {
+    if (is.null(d) || length(d) == 0L) {
+        return(NULL)
+    }
+    if (is.data.frame(d)) {
+        cd <- d[["customdata"]][1L]
+    } else if (is.list(d)) {
+        # A single point object or an array of point objects.
+        point <- if (!is.null(d[["customdata"]])) d else d[[1L]]
+        if (!is.list(point)) {
+            return(NULL)
+        }
+        cd <- point[["customdata"]]
+    } else {
+        cd <- d[1L]
+    }
+    if (is.null(cd)) {
+        return(NULL)
+    }
+    if (is.list(cd)) {
+        cd <- cd[[1L]]
+    }
+    cd <- as.character(cd)
+    if (length(cd) != 1L || is.na(cd) || !nzchar(cd)) {
+        return(NULL)
+    }
+    parts <- strsplit(cd, "\x1f", fixed = TRUE)[[1]]
+    cell <- suppressWarnings(as.integer(parts[length(parts)]))
+    if (is.na(cell)) {
+        return(NULL)
+    }
+    list(
+        marker = if (length(parts) == 2L) parts[1L] else NULL,
+        cell = cell
+    )
 }
 
 #' Interactive Ridge Plot From the Ridge Box Inputs

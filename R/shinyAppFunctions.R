@@ -87,6 +87,12 @@ highlight_df <- function(x, y, rs, somCodesName = "SOM_codes", metaD = NULL) {
 
     # Filter out NA and out-of-bounds indices
     somCodes <- metaD[[somCodesName]]
+    # Markers without a SOM code column (possible on manually chosen axes)
+    # have no node coordinates to highlight; the base plot falls back to
+    # per-node means, but the highlight layer simply stays empty.
+    if (!all(c(x, y) %in% colnames(somCodes))) {
+        return(data.frame(x = numeric(0), y = numeric(0), id = integer(0)))
+    }
     rs_valid <- rs[!is.na(rs) & rs > 0L & rs <= nrow(somCodes)]
 
     if (length(rs_valid) == 0L) {
@@ -246,7 +252,7 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups,
     dimSelection = NULL, somCodesName = "SOM_codes", sce,
     metaD = S4Vectors::metadata(sce), outputList = list(),
     projectionDf = NULL, xlim = NULL, ylim = NULL, source = NULL,
-    agreement = NULL) {
+    agreement = NULL, cellHighlight = NULL) {
     if (is.null(pp1)) {
         return(NULL)
     }
@@ -259,11 +265,14 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups,
         drawProjection(projectionDf, rs, colorbyGroups = colorbyGroups,
             sce = sce, outputList = outputList, agreement = agreement)
     } else {
-        pp1 + geom_point(
+        p <- pp1 + geom_point(
             data = highlight_df(ds$dims[1], ds$dims[2], rs, somCodesName,
                 metaD = metaD),
             aes(x = x, y = y), color = "red", size = 0.3
         )
+        hl <- .cellHighlightLayers(cellHighlight)
+        for (layer in hl) p <- p + layer
+        p
     }
     if (is.null(p3)) {
         return(NULL)
@@ -278,6 +287,51 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups,
         layout(showlegend = FALSE, dragmode = "select") %>%
         event_register("plotly_selected") %>%
         event_register("plotly_relayout")
+}
+
+#' Layers Marking a Clicked Ridge Cell in the SOM 2D Plot
+#'
+#' The clicked cell is drawn as a black diamond at its own values, its SOM
+#' node as an orange ring at the node's coordinates, and a dashed grey
+#' segment connects the two so the cell can be attributed to its node.
+#' Coordinates that cannot be resolved (NA) are dropped per layer.
+#'
+#' @param cellHighlight One-row data frame from
+#'   \code{.ridgeHighlightPoints()}, or \code{NULL}.
+#'
+#' @return A (possibly empty) list of ggplot layers.
+#'
+#' @keywords internal
+.cellHighlightLayers <- function(cellHighlight) {
+    if (is.null(cellHighlight) || nrow(cellHighlight) == 0L) {
+        return(list())
+    }
+    hl <- cellHighlight
+    # inherit.aes = FALSE: the base plot maps size/colour to data columns
+    # (e.g. size = n) that the one-row highlight data does not carry.
+    ring <- if (!is.na(hl$nodeX) && !is.na(hl$nodeY)) {
+        geom_point(
+            data = data.frame(x = hl$nodeX, y = hl$nodeY),
+            aes(x = x, y = y), shape = 1, size = 4.5, stroke = 1.3,
+            color = "darkorange2", show.legend = FALSE,
+            inherit.aes = FALSE
+        )
+    }
+    seg <- if (!is.na(hl$nodeX) && !is.na(hl$nodeY)) {
+        geom_segment(
+            data = data.frame(x = hl$x, y = hl$y, xe = hl$nodeX,
+                ye = hl$nodeY),
+            aes(x = x, y = y, xend = xe, yend = ye), linetype = 2,
+            color = "grey60", linewidth = 0.4, show.legend = FALSE,
+            inherit.aes = FALSE
+        )
+    }
+    dia <- geom_point(
+        data = data.frame(x = hl$x, y = hl$y),
+        aes(x = x, y = y), shape = 18, size = 3.2, color = "black",
+        show.legend = FALSE, inherit.aes = FALSE
+    )
+    list(seg, ring, dia)
 }
 
 #' Axis Limits of a SOM Plot

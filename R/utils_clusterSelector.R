@@ -97,6 +97,9 @@
             sidebar = .buildClusterSelectorSidebar(sce, outputList, nPlots),
             body = shinydashboard::dashboardBody(
                 .buildFirstBodyRow(colTree, nPlots),
+                # The ridge plot sits directly above the SOM 2D plots so a
+                # clicked outlier dot is re-axed into the plot right below it.
+                .buildRidgeBox(metaD[[somCodesName]], colsUsed),
                 .buildSOM2DPlotsBox(nPlots, colsUsed, outputList,
                     markers = rnSCE, dList = dList),
                 .buildSixStaticSOMBox(markers = rnSCE, dList = dList),
@@ -105,7 +108,6 @@
                 .buildStatsBox(metaD, somCodesName, outputList),
                 .buildSOMRasterBox(),
                 .buildViolinBox(metaD[[somCodesName]], colsUsed),
-                .buildRidgeBox(metaD[[somCodesName]], colsUsed),
                 .buildUpSetBox(outputList),
                 .buildDiagnosticsBox(metaD, outputList),
                 .buildOrderedHeatmapBox(outputList,

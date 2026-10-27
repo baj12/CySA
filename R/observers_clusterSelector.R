@@ -9,6 +9,95 @@
 # Shiny app packaging guidelines. All observers read and write the per-session
 # state environment `st` built in server_clusterSelector.R.
 
+#' Axis Pair for a Ridge-Clicked Marker
+#'
+#' Decides how the main SOM 2D plot should be re-axed when the user clicks a
+#' cell at \code{marker} in the ridge plot: \code{NULL} when the marker is
+#' already on an axis (or unknown), the first preset pair containing the
+#' marker otherwise, and as a last resort the marker on x with the first
+#' other marker of \code{markers} on y. Pairs that do not repeat the marker
+#' on both axes are usable; degenerate pairs are skipped.
+#'
+#' @param marker Clicked marker name, or \code{NULL}.
+#' @param dims Current axis pair of the 2D plot.
+#' @param dList Preset marker pairs.
+#' @param markers All available markers.
+#'
+#' @return A list with \code{pair} (character length 2) and \code{idx}
+#'   (position in \code{dList}, or \code{NA_integer_} for the fallback), or
+#'   \code{NULL} when the axes should stay as they are.
+#'
+#' @keywords internal
+.ridgeAxisForMarker <- function(marker, dims, dList, markers) {
+    if (is.null(marker) || !marker %in% markers) {
+        return(NULL)
+    }
+    if (marker %in% dims) {
+        return(NULL)
+    }
+    if (length(dList) > 0L) {
+        for (i in seq_along(dList)) {
+            pair <- as.character(dList[[i]])
+            if (length(pair) == 2L && marker %in% pair &&
+                pair[1L] != pair[2L]) {
+                return(list(pair = pair, idx = as.integer(i)))
+            }
+        }
+    }
+    y <- markers[!markers %in% marker][1L]
+    if (is.na(y)) {
+        return(NULL)
+    }
+    list(pair = c(marker, y), idx = NA_integer_)
+}
+
+#' Re-Axis the Main SOM 2D Plot From a Ridge-Plot Click
+#'
+#' Clicking an outlier dot at marker \code{m} in the ridge plot moves the
+#' main 2D plot to a view that contains \code{m}: the first preset pair
+#' containing it, or \code{m} on x with the first other marker on y. Clicks
+#' whose payload names no marker (the "clicked cell" overlay, empty events)
+#' and clicks on a marker that is already displayed leave the axes alone.
+#' A matched preset pair also becomes the active preset (dropdown + static
+#' views); the fallback pair behaves like a manual axis change.
+#'
+#' @inheritParams INTERNAL_registerClusterSelectorObservers
+#'
+#' @return Called for its side effects.
+#'
+#' @keywords internal
+.buildRidgeAxisObserver <- function(input, session, st) {
+    shiny::observeEvent(
+        .safeEventData("plotly_click", source = "ridgePlot",
+            verbose = st$verbose),
+        {
+            d <- .safeEventData("plotly_click", source = "ridgePlot",
+                verbose = st$verbose)
+            click <- .parseRidgeClick(d)
+            if (is.null(click) || is.null(click$marker)) {
+                return(invisible(NULL))
+            }
+            dims <- c(input$currentDimX, input$currentDimY)
+            move <- .ridgeAxisForMarker(click$marker, dims, st$dListRV(),
+                st$rnSCE)
+            if (is.null(move)) {
+                return(invisible(NULL))
+            }
+            shiny::updateSelectInput(session = session,
+                inputId = "currentDimX", selected = move$pair[1L])
+            shiny::updateSelectInput(session = session,
+                inputId = "currentDimY", selected = move$pair[2L])
+            if (!is.na(move$idx)) {
+                st$activePlot(move$idx)
+                shiny::updateSelectInput(session = session,
+                    inputId = "dimPairSelect", selected = as.character(move$idx))
+            }
+        },
+        ignoreNULL = TRUE
+    )
+    invisible(NULL)
+}
+
 #' Register clusterSelector Observers
 #'
 #' Attaches all `shiny::observe*` calls used by the clusterSelector app.
@@ -26,6 +115,7 @@
     .registerGroupObservers(input, session, st)
     .registerSampleGroupObservers(input, session, st)
     .registerPlotSelectionObservers(input, output, st)
+    .buildRidgeAxisObserver(input, session, st)
     .registerDiffTestObservers(input, output, session, st)
     .registerBoxInfoObservers(input, session)
     # Close the app and return the current outputList.
