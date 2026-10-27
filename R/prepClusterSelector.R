@@ -80,6 +80,10 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
     if (!is.null(cellTypeCol)) {
         S4Vectors::metadata(sce)$node_labels <- .buildNodeLabels(sce,
             cellTypeCol, somCodesName)
+        # The labeled path also gets the label-free dispersion column so
+        # the node-properties plot has a complete property table.
+        sce <- .ensureSOMStatsDispersion(sce, somCodesName = somCodesName,
+            assay = assay)
     }
     cacheFile <- if (!is.null(somFile)) {
         paste0(tools::file_path_sans_ext(somFile), ".subsampled.RData")
@@ -103,6 +107,57 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
         save(sce_subsampled, file = cacheFile)
     }
     list(sce = sce, sce_subsampled = sce_subsampled, dList = dList)
+}
+
+#' Append a Per-Node Dispersion Column to SOM_stats
+#'
+#' Adds \code{node_dispersion} to \code{metadata(sce)$SOM_stats}: the mean,
+#' across the SOM markers, of the within-node SD of the cells assigned to
+#' that node, computed on the full object's assay (the same cost class as
+#' the existing per-node stats). Empty nodes get \code{NA}. When
+#' \code{SOM_stats} is missing it is built first (unless
+#' \code{buildIfMissing} is \code{FALSE}); a column already present is left
+#' untouched, so the call is idempotent.
+#'
+#' @param sce A \code{SingleCellExperiment}.
+#' @param somCodesName Name of the SOM codes metadata slot.
+#' @param assay Name of the assay to use.
+#' @param buildIfMissing Build \code{SOM_stats} when it is missing.
+#'
+#' @return \code{sce}, invisibly, with the column ensured in
+#'   \code{metadata(sce)$SOM_stats}.
+#'
+#' @keywords internal
+.ensureSOMStatsDispersion <- function(sce, somCodesName = "SOM_codes",
+    assay = "exprs", buildIfMissing = TRUE) {
+    stats <- S4Vectors::metadata(sce)$SOM_stats
+    if (is.null(stats)) {
+        if (!buildIfMissing) {
+            return(invisible(sce))
+        }
+        stats <- .buildSOMStats(sce, somCodesName = somCodesName,
+            assay = assay)
+    }
+    if (!"node_dispersion" %in% colnames(stats)) {
+        somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
+        exprs <- SummarizedExperiment::assay(sce, assay)[colnames(somCodes),
+            , drop = FALSE]
+        clusterId <- as.integer(
+            SingleCellExperiment::colData(sce)$cluster_id)
+        idxByCluster <- split(seq_along(clusterId), clusterId)
+        # SOM_stats rows are in node-id order, as everywhere else in the
+        # package (e.g. .somScatterInputs).
+        stats$node_dispersion <- vapply(seq_len(nrow(somCodes)),
+            function(lv) {
+                idx <- idxByCluster[[as.character(lv)]]
+                if (length(idx) == 0L) {
+                    return(NA_real_)
+                }
+                mean(matrixStats::rowSds(exprs[, idx, drop = FALSE]))
+            }, numeric(1))
+        S4Vectors::metadata(sce)$SOM_stats <- stats
+    }
+    invisible(sce)
 }
 
 #' Stratified Subsample of the Cells
@@ -711,6 +766,10 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
     } else {
         say("Reusing existing SOM_stats")
     }
+    # The dispersion column is appended even when SOM_stats was reused, so
+    # the node-properties plot has it on every prep path.
+    sce <- .ensureSOMStatsDispersion(sce, somCodesName = somCodesName,
+        assay = assay)
     say("Building SOM cluster stats")
     S4Vectors::metadata(sce)[["som_clster_stats"]] <- .buildSOMClusterStats(
         sce, somCodesName = somCodesName, assay = assay, verbose = verbose

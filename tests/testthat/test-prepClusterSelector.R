@@ -182,3 +182,35 @@ test_that("prepClusterSelector uses provided subsampled SCE file", {
   expect_true(file.exists(file.path(root, "_data", "sce.shiny.RData")))
   unlink(root, recursive = TRUE)
 })
+
+test_that("prepClusterSelector bundle gains node_dispersion (build and reuse)", {
+  # Build branch: no SOM_stats in the source SCE.
+  sce1 <- CySA_example_sce(n_cells = 300, n_nodes = 16)
+  S4Vectors::metadata(sce1)$SOM_stats <- NULL
+  root1 <- tempfile("cysa")
+  dir.create(file.path(root1, "_data"), recursive = TRUE)
+  saveRDS(sce1, file.path(root1, "_data", "sce.RDS"))
+  prepClusterSelector(root1, total_cells_to_sample = 100, force = TRUE,
+    verbose = FALSE)
+  env1 <- new.env()
+  load(file.path(root1, "_data", "sce.shiny.RData"), envir = env1)
+  expect_true("node_dispersion" %in%
+    colnames(S4Vectors::metadata(env1$sce)$SOM_stats))
+  unlink(root1, recursive = TRUE)
+
+  # Reuse branch: existing SOM_stats (the example's, without the column)
+  # gains it via prepClusterSelector.
+  sce2 <- CySA_example_sce(n_cells = 300, n_nodes = 16)
+  expect_false("node_dispersion" %in%
+    colnames(S4Vectors::metadata(sce2)$SOM_stats))
+  root2 <- tempfile("cysa")
+  dir.create(file.path(root2, "_data"), recursive = TRUE)
+  saveRDS(sce2, file.path(root2, "_data", "sce.RDS"))
+  prepClusterSelector(root2, total_cells_to_sample = 100, force = TRUE,
+    verbose = FALSE)
+  env2 <- new.env()
+  load(file.path(root2, "_data", "sce.shiny.RData"), envir = env2)
+  expect_true("node_dispersion" %in%
+    colnames(S4Vectors::metadata(env2$sce)$SOM_stats))
+  unlink(root2, recursive = TRUE)
+})

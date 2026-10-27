@@ -125,3 +125,17 @@ test_that("cached subsample without the label column gets labels merged", {
     as.character(SingleCellExperiment::colData(prepped2$sce_subsampled)$cell_type),
     as.character(sce2$cell_type[env$sce_subsampled$id]))
 })
+
+test_that("node_dispersion is appended once and is NA for empty nodes", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  isNode10 <- as.integer(sce$cluster_id) == 10L
+  sce$cluster_id[isNode10] <- levels(sce$cluster_id)[1L]
+  out <- .ensureSOMStatsDispersion(sce)
+  st <- S4Vectors::metadata(out)$SOM_stats
+  expect_true("node_dispersion" %in% colnames(st))
+  expect_identical(nrow(st), 10L)
+  expect_true(is.na(st$node_dispersion[10]))
+  expect_true(all(is.finite(st$node_dispersion[1:9])))
+  out2 <- .ensureSOMStatsDispersion(out)
+  expect_identical(colnames(S4Vectors::metadata(out2)$SOM_stats), colnames(st))
+})
