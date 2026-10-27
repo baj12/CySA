@@ -375,6 +375,31 @@ test_that("buildProjectionDf returns expected column order", {
   expect_true("id" %in% names(df))
 })
 
+test_that("buildProjectionDf joins node_labels and preserves NA majority", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", rep(1:2, 5)))
+  prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")
+  lab <- prepped$sce$cell_type
+  lab[prepped$sce$cluster_id %in% 9:10] <- NA
+  prepped$sce$cell_type <- lab
+  prepped$sce <- .applyLabelStats(prepped$sce, "cell_type")
+  dimSelection <- list(list(dims = c("marker1", "marker2")))
+  df <- buildProjectionDf(ggplot2::ggplot(), 1L, dimSelection, prepped$sce)
+  expect_true(all(c("purity", "cell_type_majority") %in% colnames(df)))
+  expect_true(any(is.na(df$cell_type_majority[df$id %in% 9:10])))
+  # Unknown purity must not be zeroed into a fake 0% pure node.
+  expect_true(all(is.na(df$purity[df$id %in% 9:10])))
+  expect_true(all(is.finite(df$purity[df$id %in% 1:8])))
+})
+
+test_that("buildProjectionDf numeric NA-to-0 behavior is unchanged", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  dimSelection <- list(list(dims = c("marker1", "marker2")))
+  df <- buildProjectionDf(ggplot2::ggplot(), 1L, dimSelection, sce)
+  expect_false(anyNA(df))
+})
+
 test_that("drawProjection returns ggplot without colorbyGroups", {
   sce <- CySA_example_sce(n_cells = 200, n_nodes = 4)
   df <- buildProjectionDf(ggplot2::ggplot(), 1L, list(list(dims = c("marker1", "marker2"))), sce)

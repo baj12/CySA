@@ -522,8 +522,18 @@ buildProjectionDf <- function(pp1, plotIdx, dimSelection, sce,
         stringsAsFactors = FALSE, check.names = FALSE)
     colnames(coordDf)[2:3] <- chNames
     df2 <- dplyr::left_join(somStats, coordDf, by = "id")
+    if (!is.null(md$node_labels)) {
+        df2 <- dplyr::left_join(df2, md$node_labels, by = "id")
+    }
     df2 <- df2[order(df2$id), ]
-    df2[is.na(df2)] <- 0
+    # Numeric unknowns become 0 as before, except purity: an unlabeled node
+    # must not render as 0% pure. Character/factor columns keep their NA.
+    for (nm in names(df2)[vapply(df2, is.numeric, logical(1))]) {
+        if (nm == "purity") {
+            next
+        }
+        df2[[nm]][is.na(df2[[nm]])] <- 0
+    }
     # Channel columns first: drawProjection() reads names(df)[1:2].
     coordIdx <- match(chNames, names(df2))
     df2[, c(coordIdx, setdiff(seq_along(df2), coordIdx)), drop = FALSE]
