@@ -114,6 +114,26 @@ test_that("plotSOMScatter ignores unknown color_by without error", {
 })
 
 # ══════════════════════════════════════════════════════════════════════════════
+# .somStatChoices (sidebar color/size choices)
+# ══════════════════════════════════════════════════════════════════════════════
+
+test_that("somStatChoices exposes label columns only when labels exist", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  ch <- .somStatChoices(sce)
+  expect_identical(ch$colorStats, c("n", "mean", "median", "rdQu", "max"))
+  expect_identical(ch$sizeStats, c("n", "mean", "median", "rdQu", "max"))
+  sce2 <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", 1:10))
+  prepped <- prepClusterSelectorData(sce2, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")
+  ch2 <- .somStatChoices(prepped$sce)
+  expect_setequal(ch2$colorStats,
+    c("n", "mean", "median", "rdQu", "max", "purity", "cell_type_majority"))
+  expect_true("purity" %in% ch2$sizeStats)
+  expect_false("cell_type_majority" %in% ch2$sizeStats)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
 # validate-inputs
 # ══════════════════════════════════════════════════════════════════════════════
 

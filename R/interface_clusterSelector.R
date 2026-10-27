@@ -283,6 +283,28 @@
     )
 }
 
+#' Color and Size Choices for the SOM 2D Plots
+#'
+#' @param sce Full \code{SingleCellExperiment}; when the \code{node_labels}
+#'   slot exists with a \code{purity} column, \code{purity} joins both
+#'   choice sets and \code{cell_type_majority} joins the colour choices
+#'   only (the size variable must stay numeric).
+#'
+#' @return A named list with \code{colorStats} and \code{sizeStats}.
+#'
+#' @keywords internal
+.somStatChoices <- function(sce) {
+    base <- c("n", "mean", "median", "rdQu", "max")
+    labels <- S4Vectors::metadata(sce)$node_labels
+    if (is.null(labels) || !"purity" %in% colnames(labels)) {
+        return(list(colorStats = base, sizeStats = base))
+    }
+    list(
+        colorStats = c(base, "purity", "cell_type_majority"),
+        sizeStats = c(base, "purity")
+    )
+}
+
 #' Sidebar Controls for Selection Mode, Samples and SOM Plot Aesthetics
 #'
 #' @param sce Full \code{SingleCellExperiment} for sample-id choices.
@@ -292,7 +314,7 @@
 #' @keywords internal
 .sidebarDisplayControls <- function(sce) {
     samples <- unique(as.character(sce$sample_id))
-    stats <- c("n", "mean", "median", "rdQu", "max")
+    ch <- .somStatChoices(sce)
     shiny::tagList(
         .withTip("selectMode", shiny::radioButtons("selectMode",
             "Select mode", choices = c("view", "remove others", "add",
@@ -305,10 +327,10 @@
             value = 0.99, step = 0.01)),
         shiny::helpText("Lower percentiles zoom in further on dense regions."),
         .withTip("somColorVar", shiny::selectInput("somColorVar",
-            "SOM 2D color by", choices = stats, selected = "n",
+            "SOM 2D color by", choices = ch$colorStats, selected = "n",
             multiple = FALSE)),
         .withTip("somSizeVar", shiny::selectInput("somSizeVar",
-            "SOM 2D size by", choices = stats, selected = "max",
+            "SOM 2D size by", choices = ch$sizeStats, selected = "max",
             multiple = FALSE)),
         shiny::helpText(
             "Color and size summarise marker expression per SOM node."
