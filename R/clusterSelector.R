@@ -11,6 +11,8 @@ utils::globalVariables(c(
     "pc1", "pc2", "rowElement", "cellCounts", "cellPercentages",
     "dend", "dendTable", "clusterPatientTable", "somRasterData",
     "somRasterObj", "sce_subsampled", "metaD", "sceRN", "sceCN",
+    # Names loaded from the saved prep bundle by .applyLabelStatsToBundle().
+    "dList", "dend_obj", "dend_table",
     "chx", "nNsub", "sce_subsampledRN", "df", "dfPlot",
     "outputList", "dimSelection", "activePlot", "rsUsed",
     "inputClusterNumber", "violinPlotSelection", "groupsInput",

@@ -26,6 +26,13 @@
   plugs in as one colData column, and the section shows the bridge from the
   document's global pipeline metrics to the per-node interactive view.
 
+## Bug fixes
+
+* `R CMD check`'s "R code for possible problems" note is back to its
+  pre-feature set: the names that `.applyLabelStatsToBundle()` restores from
+  the saved bundle (`dList`, `dend_obj`, `dend_table`) are declared in
+  `utils::globalVariables()`, like the other bundle names before them.
+
 # CySA 0.99.40
 
 ## New features
