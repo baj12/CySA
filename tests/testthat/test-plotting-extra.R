@@ -86,6 +86,34 @@ test_that("plotSOMScatter returns NULL when all channels unknown", {
 })
 
 # ══════════════════════════════════════════════════════════════════════════════
+# plotSOMScatter with known-label node properties
+# ══════════════════════════════════════════════════════════════════════════════
+
+test_that("plotSOMScatter colors by purity and by known cell type", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", rep(1:3, length.out = 10)))
+  prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")
+  get_scale <- function(p, aesthetic) {
+    Filter(function(s) aesthetic %in% s$aesthetics, p$scales$scales)[[1]]
+  }
+  p1 <- plotSOMScatter(prepped$sce, chs = c("marker1", "marker2"),
+    color_by = "purity")
+  # ggplot2 4.x names colour scales ScaleContinuous/ScaleDiscrete (no
+  # *Colour subclass); the aesthetic filter pins them to colour.
+  expect_s3_class(get_scale(p1, "colour"), "ScaleContinuous")
+  p2 <- plotSOMScatter(prepped$sce, chs = c("marker1", "marker2"),
+    color_by = "cell_type_majority")
+  expect_s3_class(get_scale(p2, "colour"), "ScaleDiscrete")
+})
+
+test_that("plotSOMScatter ignores unknown color_by without error", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  expect_s3_class(plotSOMScatter(sce, chs = c("marker1", "marker2"),
+    color_by = "purity"), "ggplot")
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
 # validate-inputs
 # ══════════════════════════════════════════════════════════════════════════════
 

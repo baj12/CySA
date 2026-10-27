@@ -124,8 +124,29 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
         codes <- cbind(codes, stats::setNames(vals, NULL))
         colnames(codes)[ncol(codes)] <- ch
     }
-    list(codes = codes, chs = chs,
-        stats = if (!is.null(statsSlot)) md[[statsSlot]])
+    list(codes = codes, chs = chs, stats = .somScatterStats(x, md, statsSlot))
+}
+
+#' Stats Frame of plotSOMScatter()
+#'
+#' The SOM statistics joined with the known-label node summary when the
+#' \code{node_labels} slot exists, so \code{purity} and
+#' \code{cell_type_majority} can drive point colour and size.
+#'
+#' @param x The \code{SingleCellExperiment} being plotted.
+#' @param md Its metadata (as a list).
+#' @param statsSlot Name of the SOM statistics metadata slot.
+#'
+#' @return The joined statistics data frame, or \code{NULL} when no
+#'   statistics are available.
+#'
+#' @keywords internal
+.somScatterStats <- function(x, md, statsSlot) {
+    stats <- if (!is.null(statsSlot)) md[[statsSlot]]
+    if (is.null(stats) || is.null(md$node_labels)) {
+        return(stats)
+    }
+    dplyr::left_join(stats, md$node_labels, by = "id")
 }
 
 #' Plot Data of plotSOMScatter()
@@ -206,6 +227,20 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
     } else if (colVar %in% names(CATALYST::cluster_codes(x))) {
         if (is.null(k_pal)) k_pal <- CySA_default_cluster_cols()
         out$scale <- ggplot2::scale_color_manual(values = k_pal)
+        out$guides <- ggplot2::guides(col = ggplot2::guide_legend(
+            override.aes = list(alpha = 1, size = 3)
+        ))
+    } else {
+        # Categorical property column (e.g. the known-label majority): map
+        # every level to a Set2 colour, cycled when there are more levels
+        # than the palette holds; unknown values render grey.
+        levs <- unique(na.omit(df[[colVar]]))
+        pal <- RColorBrewer::brewer.pal(max(3, min(8, length(levs))), "Set2")
+        out$scale <- ggplot2::scale_color_manual(
+            values = stats::setNames(
+                rep(pal, length.out = length(levs)), levs),
+            na.value = "grey70"
+        )
         out$guides <- ggplot2::guides(col = ggplot2::guide_legend(
             override.aes = list(alpha = 1, size = 3)
         ))
