@@ -4,7 +4,12 @@
 \alias{CySA_example_sce}
 \title{Minimal example SingleCellExperiment for CySA}
 \usage{
-CySA_example_sce(n_cells = 1000, n_nodes = 50, n_markers = 12)
+CySA_example_sce(
+  n_cells = 1000,
+  n_nodes = 50,
+  n_markers = 12,
+  cell_types = NULL
+)
 }
 \arguments{
 \item{n_cells}{Number of cells (columns).}
@@ -12,6 +17,11 @@ CySA_example_sce(n_cells = 1000, n_nodes = 50, n_markers = 12)
 \item{n_nodes}{Number of SOM nodes.}
 
 \item{n_markers}{Number of markers (rows).}
+
+\item{cell_types}{Optional character vector of length \code{n_nodes}
+giving a known cell type per node; when supplied, the colData gains a
+\code{cell_type} column carrying \code{cell_types[cluster_id]} per cell
+(per-cell known labels for testing the labeled workflows).}
 }
 \value{
 A \code{\link[SingleCellExperiment]{SingleCellExperiment}} with

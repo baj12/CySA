@@ -11,7 +11,8 @@ prepClusterSelectorData(
   total_cells_to_sample = 1e+05,
   somCodesName = "SOM_codes",
   assay = "exprs",
-  seed = 123
+  seed = 123,
+  cellTypeCol = NULL
 )
 }
 \arguments{
@@ -31,6 +32,16 @@ defaults to the first 12 row names of \code{sce}.}
 \item{assay}{Name of the assay to use.}
 
 \item{seed}{Random seed for reproducibility.}
+
+\item{cellTypeCol}{Optional name of a colData column holding per-cell
+known cell type labels. When given, the full \code{sce} is modified in
+place: \code{metadata(sce)$node_labels} gains a data frame keyed by
+node with the share of labeled cells carrying the node's majority label
+(\code{purity}) and that label (\code{cell_type_majority}); nodes with
+no labeled cells stay \code{NA}. The label column is also ensured on
+the subsample (cached subsamples predating the column are merged from
+the full object by their \code{id} colData column, or redrawn when no
+such index exists).}
 }
 \value{
 A list with \code{sce}, \code{sce_subsampled}, and \code{dList}.

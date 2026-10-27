@@ -3,6 +3,7 @@
 export(CySA_default_cluster_cols)
 export(CySA_example_sce)
 export(clusterSelector)
+export(nodeAmbiguity)
 export(plotCytoScatter)
 export(plotSOMScatter)
 export(prepClusterSelector)

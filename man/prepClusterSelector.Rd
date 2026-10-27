@@ -17,7 +17,8 @@ prepClusterSelector(
   force = FALSE,
   outputList = NULL,
   seed = 123,
-  subsampledSCEFile = NULL
+  subsampledSCEFile = NULL,
+  cellTypeCol = NULL
 )
 }
 \arguments{
@@ -51,6 +52,14 @@ Output files are written to \code{currentRoot/_data/}.}
 (for example \code{sce.subsampled.RDS}). If provided and the file exists,
 it is reused instead of subsampling the full SCE. This avoids the memory
 cost of subsampling large datasets.}
+
+\item{cellTypeCol}{Optional name of a colData column holding per-cell
+known cell type labels, forwarded to
+\code{\link{prepClusterSelectorData}}. On every path — including the
+early return on an existing bundle — the saved \code{sce} gains
+\code{metadata(sce)$node_labels} (per-node purity and majority label)
+and \code{node_dispersion} on \code{SOM_stats}, and the subsample
+carries the label column.}
 }
 \value{
 The path \code{currentRoot}.

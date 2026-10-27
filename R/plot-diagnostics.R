@@ -335,6 +335,30 @@ plotOrderedClusterHeatmap <- function(somCodes, somStats, dend,
     )
 }
 
+#' Aggregate Per-Cell Distances into Per-Cluster Ambiguity
+#'
+#' @param cellDf Output of \code{.cellCodeDistances()}.
+#' @param ambiguousThreshold \code{rivalRatio} above which a cell counts as
+#'   ambiguous.
+#'
+#' @return A data frame with \code{cluster_id}, \code{n},
+#'   \code{meanDistToCode}, \code{medianRatio}, and \code{pctAmbiguous}.
+#'
+#' @keywords internal
+.aggregateCellCodeDistances <- function(cellDf, ambiguousThreshold = 0.9) {
+    clusters <- sort(unique(cellDf$cluster_id))
+    data.frame(
+        cluster_id = clusters,
+        n = tapply(cellDf$distToCode, cellDf$cluster_id, length)[clusters],
+        meanDistToCode = tapply(cellDf$distToCode, cellDf$cluster_id,
+            mean)[clusters],
+        medianRatio = tapply(cellDf$rivalRatio, cellDf$cluster_id,
+            stats::median)[clusters],
+        pctAmbiguous = tapply(cellDf$rivalRatio, cellDf$cluster_id,
+            function(r) 100 * mean(r > ambiguousThreshold))[clusters]
+    )
+}
+
 #' Per-Cluster SOM Ambiguity Summary
 #'
 #' Aggregates \code{.cellCodeDistances()} by cluster: the percentage of
@@ -353,18 +377,63 @@ plotOrderedClusterHeatmap <- function(somCodes, somStats, dend,
 #' @keywords internal
 computeClusterAmbiguity <- function(sce, somCodes, markers = NULL,
     ambiguousThreshold = 0.9) {
-    cellDf <- .cellCodeDistances(sce, somCodes, markers)
-    clusters <- sort(unique(cellDf$cluster_id))
-    data.frame(
-        cluster_id = clusters,
-        n = tapply(cellDf$distToCode, cellDf$cluster_id, length)[clusters],
-        meanDistToCode = tapply(cellDf$distToCode, cellDf$cluster_id,
-            mean)[clusters],
-        medianRatio = tapply(cellDf$rivalRatio, cellDf$cluster_id,
-            stats::median)[clusters],
-        pctAmbiguous = tapply(cellDf$rivalRatio, cellDf$cluster_id,
-            function(r) 100 * mean(r > ambiguousThreshold))[clusters]
+    .aggregateCellCodeDistances(
+        .cellCodeDistances(sce, somCodes, markers), ambiguousThreshold)
+}
+
+#' Per-Node SOM Ambiguity Summary
+#'
+#' The per-node ambiguity statistics the Cluster ambiguity diagnostic tab
+#' shows, keyed by node \code{id} so they join with \code{SOM_stats} and the
+#' known-label node summary. The cells x nodes distance work runs on a
+#' random subsample of at most \code{maxCells} cells (drawn in chunks, so
+#' the full distance matrix never materializes); its cost scales with
+#' sampled cells times nodes, so pass a subsample or a precomputed summary
+#' for very large objects. Nodes absent from the sample have no row.
+#'
+#' @param sce A \code{SingleCellExperiment}; the first assay is used.
+#' @param somCodesName Name of the SOM codes metadata slot.
+#' @param markers Marker (column) names to use for the distances;
+#'   \code{NULL} uses every column of the SOM codes.
+#' @param ambiguousThreshold \code{rivalRatio} above which a cell counts as
+#'   ambiguous (see \code{\link{computeClusterAmbiguity}}).
+#' @param maxCells Upper bound on the number of cells used.
+#' @param seed Seed of the subsample draw.
+#'
+#' @return A data frame with \code{id} (integer node id), \code{n},
+#'   \code{meanDistToCode}, \code{medianRatio}, and \code{pctAmbiguous},
+#'   ordered by \code{id}.
+#'
+#' @export
+nodeAmbiguity <- function(sce, somCodesName = "SOM_codes", markers = NULL,
+    ambiguousThreshold = 0.9, maxCells = 20000, seed = 1) {
+    somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
+    if (is.null(somCodes)) {
+        stop("No '", somCodesName, "' found in metadata(sce)")
+    }
+    n <- min(as.integer(maxCells), ncol(sce))
+    if (n < 1L) {
+        stop("'maxCells' must be positive")
+    }
+    sampledIdx <- withr::with_seed(seed, sample(seq_len(ncol(sce)), n))
+    # Chunked distance computation: .cellCodeDistances() builds a
+    # cells x nodes matrix, so the sample is split to bound its size.
+    chunkSize <- 5000L
+    chunks <- split(sampledIdx,
+        ceiling(seq_along(sampledIdx) / chunkSize))
+    cellDf <- do.call(rbind, lapply(chunks, function(idx) {
+        .cellCodeDistances(sce[, idx], somCodes, markers)
+    }))
+    agg <- .aggregateCellCodeDistances(cellDf, ambiguousThreshold)
+    out <- data.frame(
+        id = as.integer(agg$cluster_id),
+        n = as.integer(agg$n),
+        meanDistToCode = agg$meanDistToCode,
+        medianRatio = agg$medianRatio,
+        pctAmbiguous = agg$pctAmbiguous,
+        stringsAsFactors = FALSE
     )
+    out[order(out$id), , drop = FALSE]
 }
 
 #' Cluster SOM-Ambiguity Plot

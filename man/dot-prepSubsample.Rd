@@ -13,7 +13,8 @@
   somCodesName,
   assay,
   seed,
-  say
+  say,
+  cellTypeCol = NULL
 )
 }
 \arguments{
@@ -38,6 +39,14 @@ cost of subsampling large datasets.}
 \item{seed}{Random seed for subsampling.}
 
 \item{say}{Progress message function.}
+
+\item{cellTypeCol}{Optional name of a colData column holding per-cell
+known cell type labels, forwarded to
+\code{\link{prepClusterSelectorData}}. On every path — including the
+early return on an existing bundle — the saved \code{sce} gains
+\code{metadata(sce)$node_labels} (per-node purity and majority label)
+and \code{node_dispersion} on \code{SOM_stats}, and the subsample
+carries the label column.}
 }
 \value{
 A list with \code{sce_subsampled} and \code{dList}.
