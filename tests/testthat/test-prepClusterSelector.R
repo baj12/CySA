@@ -214,3 +214,42 @@ test_that("prepClusterSelector bundle gains node_dispersion (build and reuse)", 
     colnames(S4Vectors::metadata(env2$sce)$SOM_stats))
   unlink(root2, recursive = TRUE)
 })
+
+test_that("prepClusterSelector forwards cellTypeCol on the normal path", {
+  root <- tempfile("cysa")
+  dir.create(file.path(root, "_data"), recursive = TRUE)
+  on.exit(unlink(root, recursive = TRUE), add = TRUE)
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 16,
+    cell_types = paste0("t", rep(1:4, length.out = 16)))
+  saveRDS(sce, file.path(root, "_data", "sce.RDS"))
+  prepClusterSelector(root, sce = sce, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type", verbose = FALSE)
+  env <- new.env()
+  load(file.path(root, "_data", "sce.shiny.RData"), envir = env)
+  expect_true(!is.null(S4Vectors::metadata(env$sce)$node_labels))
+  expect_true("node_dispersion" %in%
+    colnames(S4Vectors::metadata(env$sce)$SOM_stats))
+  expect_true("cell_type" %in%
+    colnames(SummarizedExperiment::colData(env$sce_subsampled)))
+})
+
+test_that("early return still applies label stats to the existing bundle", {
+  root <- tempfile("cysa")
+  dir.create(file.path(root, "_data"), recursive = TRUE)
+  on.exit(unlink(root, recursive = TRUE), add = TRUE)
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 16,
+    cell_types = paste0("t", rep(1:4, length.out = 16)))
+  saveRDS(sce, file.path(root, "_data", "sce.RDS"))
+  # First run WITHOUT labels (creates the bundle), then re-run WITH
+  # cellTypeCol and force = FALSE: the early-return path must apply the
+  # label stats to the loaded bundle anyway.
+  prepClusterSelector(root, sce = sce, total_cells_to_sample = 100,
+    verbose = FALSE)
+  prepClusterSelector(root, sce = sce, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type", verbose = FALSE)
+  env <- new.env()
+  load(file.path(root, "_data", "sce.shiny.RData"), envir = env)
+  expect_true(!is.null(S4Vectors::metadata(env$sce)$node_labels))
+  expect_true("cell_type" %in%
+    colnames(SummarizedExperiment::colData(env$sce_subsampled)))
+})

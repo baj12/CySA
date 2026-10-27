@@ -78,12 +78,7 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
         dList <- .defaultDList(sce)
     }
     if (!is.null(cellTypeCol)) {
-        S4Vectors::metadata(sce)$node_labels <- .buildNodeLabels(sce,
-            cellTypeCol, somCodesName)
-        # The labeled path also gets the label-free dispersion column so
-        # the node-properties plot has a complete property table.
-        sce <- .ensureSOMStatsDispersion(sce, somCodesName = somCodesName,
-            assay = assay)
+        sce <- .applyLabelStats(sce, cellTypeCol, somCodesName, assay)
     }
     cacheFile <- if (!is.null(somFile)) {
         paste0(tools::file_path_sans_ext(somFile), ".subsampled.RData")
@@ -196,6 +191,35 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
         levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
     )
     sub
+}
+
+#' Apply the Known-Label Prep Steps to an SCE
+#'
+#' Shared label-stats application used by every labeled prep path: derives
+#' \code{metadata(sce)$node_labels} from the per-cell label column and
+#' ensures the label-free \code{node_dispersion} column on \code{SOM_stats}.
+#'
+#' @param sce A \code{SingleCellExperiment}.
+#' @param cellTypeCol Name of the known cell type column, or \code{NULL}.
+#' @param somCodesName Name of the SOM codes metadata slot.
+#' @param assay Name of the assay to use.
+#'
+#' @return \code{sce} unchanged when \code{cellTypeCol} is \code{NULL},
+#'   otherwise with the label stats applied.
+#'
+#' @keywords internal
+.applyLabelStats <- function(sce, cellTypeCol, somCodesName = "SOM_codes",
+    assay = "exprs") {
+    if (is.null(cellTypeCol)) {
+        return(sce)
+    }
+    S4Vectors::metadata(sce)$node_labels <- .buildNodeLabels(sce,
+        cellTypeCol, somCodesName)
+    # The labeled path also gets the label-free dispersion column so the
+    # node-properties plot has a complete property table.
+    sce <- .ensureSOMStatsDispersion(sce, somCodesName = somCodesName,
+        assay = assay)
+    sce
 }
 
 #' Per-Node Summary of the Known Cell Type Labels
@@ -648,6 +672,13 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
 #'   (for example \code{sce.subsampled.RDS}). If provided and the file exists,
 #'   it is reused instead of subsampling the full SCE. This avoids the memory
 #'   cost of subsampling large datasets.
+#' @param cellTypeCol Optional name of a colData column holding per-cell
+#'   known cell type labels, forwarded to
+#'   \code{\link{prepClusterSelectorData}}. On every path — including the
+#'   early return on an existing bundle — the saved \code{sce} gains
+#'   \code{metadata(sce)$node_labels} (per-node purity and majority label)
+#'   and \code{node_dispersion} on \code{SOM_stats}, and the subsample
+#'   carries the label column.
 #'
 #' @examples
 #' root <- file.path(tempdir(), "cysa-example")
@@ -664,7 +695,7 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
     somCodesName = "SOM_codes", clusterColName = "cluster_id",
     total_cells_to_sample = 100000, dList = NULL, assay = "exprs",
     verbose = TRUE, force = FALSE, outputList = NULL, seed = 123,
-    subsampledSCEFile = NULL) {
+    subsampledSCEFile = NULL, cellTypeCol = NULL) {
     say <- function(...) if (verbose) message(...)
     somFile <- file.path(currentRoot, "_data", "sce.RDS")
     outFile <- file.path(currentRoot, "_data", "sce.shiny.RData")
@@ -672,6 +703,20 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
         stop("SCE file not found: ", somFile)
     }
     if (file.exists(outFile) && !force) {
+        if (!is.null(cellTypeCol)) {
+            # The bundle predates the label stats: apply them to the loaded
+            # bundle and re-save it with the same field names.
+            say("Output exists; applying label stats to the bundle")
+            load(outFile)
+            sce <- .applyLabelStats(sce, cellTypeCol, somCodesName, assay)
+            sce_subsampled <- .mergeLabelsIntoSubsample(sce_subsampled,
+                sce, cellTypeCol, total_cells_to_sample, somCodesName,
+                seed)
+            save(sce, sce_subsampled, outputList, dList, dend_obj,
+                dend_table, clusterPatientTable, somRasterData,
+                somRasterObj, file = outFile, compress = FALSE)
+            return(currentRoot)
+        }
         say("Output exists and force = FALSE; returning currentRoot")
         return(currentRoot)
     }
@@ -680,7 +725,8 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
         sce <- readRDS(somFile)
     }
     sub <- .prepSubsample(sce, subsampledSCEFile, somFile, dList,
-        total_cells_to_sample, somCodesName, assay, seed, say)
+        total_cells_to_sample, somCodesName, assay, seed, say,
+        cellTypeCol = cellTypeCol)
     sce_subsampled <- sub$sce_subsampled
     dList <- sub$dList
     say("Building cluster patient table")
@@ -692,6 +738,7 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
         SingleCellExperiment::colData(sce)[, c("sample_id", clusterColName)]
     ))
     sce <- .prepSomSummaries(sce, somCodesName, assay, verbose, say)
+    sce <- .applyLabelStats(sce, cellTypeCol, somCodesName, assay)
     say("Building SOM raster data")
     somRasterData <- .buildSOMRasterData(sce, somCodesName = somCodesName)
     somRasterObj <- NULL
@@ -724,7 +771,8 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
 #'
 #' @keywords internal
 .prepSubsample <- function(sce, subsampledSCEFile, somFile, dList,
-    total_cells_to_sample, somCodesName, assay, seed, say) {
+    total_cells_to_sample, somCodesName, assay, seed, say,
+    cellTypeCol = NULL) {
     if (!is.null(subsampledSCEFile) && file.exists(subsampledSCEFile)) {
         say("Using provided subsampled SCE file: ", subsampledSCEFile)
         if (is.null(dList)) {
@@ -735,14 +783,19 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
             length(SummarizedExperiment::assays(sub)) == 0) {
             say("Restoring assay data into subsampled SCE")
         }
-        return(list(sce_subsampled = .restoreSubsampledAssay(sub, sce, assay),
-            dList = dList))
+        sub <- .restoreSubsampledAssay(sub, sce, assay)
+        # An RDS subsample that predates the label column still gets the
+        # labels, merged from the full SCE.
+        sub <- .mergeLabelsIntoSubsample(sub, sce, cellTypeCol,
+            total_cells_to_sample, somCodesName, seed)
+        return(list(sce_subsampled = sub, dList = dList))
     }
     say("Subsampling SCE")
     prep <- prepClusterSelectorData(
         sce = sce, somFile = somFile, dList = dList,
         total_cells_to_sample = total_cells_to_sample,
-        somCodesName = somCodesName, assay = assay, seed = seed
+        somCodesName = somCodesName, assay = assay, seed = seed,
+        cellTypeCol = cellTypeCol
     )
     list(sce_subsampled = prep$sce_subsampled, dList = prep$dList)
 }
