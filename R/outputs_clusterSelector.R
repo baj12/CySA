@@ -31,6 +31,7 @@
     .registerRasterPieOutputs(input, output, st)
     .registerGroupPlotOutputs(input, output, st)
     .registerDiagnosticsOutputs(input, output, st)
+    .registerNodePropsOutputs(input, output, st)
     .registerOrderedHeatmapOutputs(input, output, st)
     .registerDiffTestOutputs(input, output, st)
     output$downloadPlots <- .downloadPlotsHandler(input, st)
@@ -279,4 +280,17 @@
             )
         }
     )
+}
+
+#' Register the Node-Properties 2D Plot Output
+#'
+#' @param input,output Shiny objects.
+#' @param st Server state environment.
+#'
+#' @return Called for its side effects.
+#'
+#' @keywords internal
+.registerNodePropsOutputs <- function(input, output, st) {
+    output$nodePropsPlot <- plotly::renderPlotly(.nodePropsPlotly(st, input))
+    invisible(NULL)
 }

@@ -387,3 +387,28 @@
     rownames(eI) <- info$sample_id
     eI
 }
+
+#' Plotly Node-Properties 2D Plot
+#'
+#' Renders the node-properties plot (one point per SOM node) with the
+#' axes chosen in the UI and the current selection highlighted; the nodes
+#' carry \code{key = id} so plotly selection events resolve to nodes.
+#'
+#' @param st Server state environment.
+#' @param input Shiny input object.
+#'
+#' @return A plotly widget, or \code{NULL}.
+#'
+#' @keywords internal
+.nodePropsPlotly <- function(st, input) {
+    df <- st$nodePropsDf()
+    rs <- st$rsUsed_d()
+    shiny::req(df, rs)
+    st$selectedUpdate2()
+    p <- plotNodeProps(st$sce, xVar = input$nodePropsX,
+        yVar = input$nodePropsY, ambiguity = st$nodeAmbiguity(),
+        selectedIds = rs)
+    quiet_ggplotly(p, source = "nodeProps", tooltip = "text") %>%
+        plotly::layout(dragmode = "select") %>%
+        plotly::event_register("plotly_selected")
+}

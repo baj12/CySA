@@ -122,3 +122,48 @@ test_that("server rmGrp does nothing when selected group doesn't exist", {
     )
   })
 })
+
+# node-properties: reactives, renderer and selection ----
+
+test_that("nodePropsDf combines stats, labels and ambiguity", {
+  fx <- make_labeled_test_app()
+  suppress_plotly_event_warnings({
+    quiet_plotly_test(shiny::testServer(
+      app = fx$app,
+      expr = {
+        session$flushReact()
+        df <- st$nodePropsDf()
+        expect_true(all(c("id", "n", "purity", "cell_type_majority",
+          "medianRatio", "node_dispersion") %in% colnames(df)))
+        expect_identical(nrow(df), 10L)
+      }
+    ))
+  })
+})
+
+test_that("nodePropsPlot renders for labeled and unlabeled apps", {
+  fx <- make_labeled_test_app()
+  suppress_plotly_event_warnings({
+    quiet_plotly_test(shiny::testServer(
+      app = fx$app,
+      expr = {
+        session$flushReact()
+        session$setInputs(nodePropsX = "purity", nodePropsY = "n")
+        out <- output$nodePropsPlot
+        expect_true(!is.null(out))
+      }
+    ))
+  })
+  fx2 <- make_test_app()
+  suppress_plotly_event_warnings({
+    quiet_plotly_test(shiny::testServer(
+      app = fx2$app,
+      expr = {
+        session$flushReact()
+        session$setInputs(nodePropsX = "medianRatio", nodePropsY = "n")
+        out <- output$nodePropsPlot
+        expect_true(!is.null(out))
+      }
+    ))
+  })
+})

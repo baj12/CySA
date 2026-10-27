@@ -53,6 +53,7 @@
         .buildStatsReactives(st, input)
         .buildGroupPlotReactives(st, input)
         .buildDiagnosticsReactives(st, input)
+        .buildNodePropsReactives(st, input)
         .buildOrderedHeatmapReactives(st, input)
         .buildDiffTestReactives(st, input)
         st$ridgeServer <- .buildRidgeServer(

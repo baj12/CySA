@@ -352,7 +352,7 @@
     .buildZoomObservers(st$nPlots, input, st$zoomFunc, verbose)
     shiny::observe(st$zoomFunc(.safeEventData("plotly_relayout",
         source = "somDataMain", verbose = verbose), 1L))
-    for (src in c("somDataMain", "tsne", "umap", "pca")) {
+    for (src in c("somDataMain", "tsne", "umap", "pca", "nodeProps")) {
         .buildSelectionObserver(src, input, st$rsUsed, st$rsUsed_d,
             .inputSelect, verbose)
     }

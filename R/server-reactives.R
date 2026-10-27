@@ -350,3 +350,37 @@
     })
     invisible(st)
 }
+
+#' Build the Node-Properties Reactives
+#'
+#' Per-node ambiguity of the subsample (computed once per session and
+#' cached) and the node-properties data frame joining \code{SOM_stats},
+#' the known-label node summary (when present) and the ambiguity summary.
+#'
+#' @inheritParams .buildDimRedPlotReactives
+#'
+#' @return Called for its side effect of adding reactives to \code{st}.
+#'
+#' @keywords internal
+.buildNodePropsReactives <- function(st, input) {
+    st$nodeAmbiguity <- shiny::reactive({
+        nodeAmbiguity(st$sce_subsampled, somCodesName = st$somCodesName,
+            markers = st$colsUsed)
+    }) %>% shiny::bindCache(st$sce_subsampled)
+    st$nodePropsDf <- shiny::reactive({
+        stats <- S4Vectors::metadata(st$sce)$SOM_stats
+        shiny::req(stats)
+        labels <- st$metaD$node_labels
+        df <- stats
+        if (!is.null(labels)) {
+            df <- dplyr::left_join(df, labels, by = "id")
+        }
+        # ambiguity also has an 'n' (cells sampled); keep the SOM_stats one
+        amb <- st$nodeAmbiguity()
+        if (!is.null(amb)) {
+            df <- dplyr::left_join(df, amb, by = "id", suffix = c("", ".amb"))
+        }
+        df[order(df$id), , drop = FALSE]
+    }) %>% shiny::bindCache(st$sce_subsampled)
+    invisible(st)
+}

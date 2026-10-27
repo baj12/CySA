@@ -34,7 +34,11 @@ utils::globalVariables(c(
     "diagMdsPlot", "diagExprHeatmapPlot", "diagNrsPlot",
     "orderedHeatmapPlot", "diffResult",
     # aes() column and output name of the cluster-ambiguity diagnostic.
-    "pctAmbiguous", "diagAmbiguityPlot"
+    "pctAmbiguous", "diagAmbiguityPlot",
+    # aes() columns of the node-properties 2D plot (node-properties.R,
+    # server-reactives.R) and its output name.
+    "purity", "cell_type_majority", "node_dispersion",
+    "meanDistToCode", "medianRatio", "nodePropsDf", "nodeAmbiguity"
 ))
 
 #' Cluster Selector Shiny Application
