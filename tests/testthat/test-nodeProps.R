@@ -27,3 +27,29 @@ test_that("computeClusterAmbiguity still works after the refactor", {
   expect_identical(colnames(s),
     c("cluster_id", "n", "meanDistToCode", "medianRatio", "pctAmbiguous"))
 })
+
+test_that("plotNodeProps defaults to purity x n when labels exist", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", rep(1:2, 5)))
+  prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")
+  amb <- nodeAmbiguity(prepped$sce_subsampled, maxCells = 100)
+  p <- plotNodeProps(prepped$sce, ambiguity = amb)
+  expect_s3_class(p, "ggplot")
+  expect_identical(as.character(p$labels$x), "purity")
+  expect_identical(as.character(p$labels$y), "n")
+})
+
+test_that("plotNodeProps defaults to medianRatio x n without labels", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  p <- plotNodeProps(sce, ambiguity = nodeAmbiguity(sce, maxCells = 100))
+  expect_identical(as.character(p$labels$x), "medianRatio")
+  expect_identical(as.character(p$labels$y), "n")
+})
+
+test_that("plotNodeProps stops with too few numeric properties", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  amb <- nodeAmbiguity(sce, maxCells = 100)
+  expect_error(plotNodeProps(sce, xVar = "notThere", ambiguity = amb),
+    "notThere")
+})
