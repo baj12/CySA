@@ -44,6 +44,7 @@ testfile
 
 # Vignette-generated analysis caches and regeneration artifacts
 vignettes/spectral_analysis/
+vignettes/spectral_analysis_dev/
 vignettes/support/cyet/qc/
 *.log
 *.bak

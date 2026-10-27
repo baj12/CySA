@@ -29,6 +29,13 @@ knitr::opts_chunk$set(
     collapse = TRUE, comment = "#>", message = FALSE, warning = FALSE,
     fig.width = 8, fig.height = 5
 )
+## The vignette parallelises with mclapply (n_cores worker processes); a
+## per-process BLAS thread pool would multiply that by the machine's core
+## count (hundreds of spinning threads per worker on a cluster node) and
+## collapse under its own sync overhead. Cap every BLAS/OpenMP pool at one
+## thread; the shell running render() should set the same variables.
+Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1",
+           MKL_NUM_THREADS = "1", VECLIB_MAXIMUM_THREADS = "1")
 ```
 
 ## Overview
@@ -359,7 +366,7 @@ inputs <- cached("00_inputs.rds", local({
 
 raw <- inputs$raw; donor <- inputs$donor
 pop <- factor(stringi::stri_trans_general(
-    stringi::stri_trans_nfc(as.character(inputs$population)), "Latin-ASCII"))
+    stringi::stri_trans_nfc(enc2utf8(as.character(inputs$population))), "Latin-ASCII"))
 if (params$dev_n > 0 && params$dev_n < nrow(raw)) {
     set.seed(1)
     keep <- sort(sample(nrow(raw), params$dev_n))
@@ -415,7 +422,7 @@ gating_markers <- c("CD45", "CD14", "CD19", "CD56", "CD3", "CD4", "CD8", "CD45RA
 
 #' Same ASCII-normalisation the main `inputs` chunk applies to `pop` (the
 #' decomposed "i" + combining diaeresis in "Naive" breaks the PDF device).
-norm_ascii_gate <- function(x) stringi::stri_trans_general(stringi::stri_trans_nfc(x), "Latin-ASCII")
+norm_ascii_gate <- function(x) stringi::stri_trans_general(stringi::stri_trans_nfc(enc2utf8(x)), "Latin-ASCII")
 
 gating_load_one <- function(fp, pop, donor_id) {
     ff <- read.FCS(fp, transformation = FALSE, truncate_max_range = FALSE)
@@ -1853,6 +1860,10 @@ paired_effect <- function(d, f, ref) {
     r <- d[lev == ref, c(key, "ari")]; names(r)[names(r) == "ari"] <- "ari_ref"
     o <- d[lev != ref, c(key, f, "ari")]
     m <- merge(o, r, by = key)
+    if (nrow(m) == 0L) {
+        return(data.frame(factor = character(0), level = character(0),
+                          delta = numeric(0), stringsAsFactors = FALSE))
+    }
     data.frame(factor = f, level = as.character(m[[f]]), delta = m$ari - m$ari_ref)
 }
 effects <- rbind(paired_effect(s, "scaling", "none"),
@@ -1909,8 +1920,7 @@ re-running):
   is clearly worse than `paper` (`r sprintf("%+.3f", eff("cofactor", "cyet_donor"))`).
   The flat cofactors are within or near the band, consistent with the stage-0
   plateau.
-* **Batch.** cyCombine moves ARI by `r sprintf("%+.3f", eff("batch", "cyCombine"))`
-  on average, small relative to the band.
+* **Batch.** `r if (have_cycombine) sprintf("cyCombine moves ARI by %+.3f on average, small relative to the band.", eff("batch", "cyCombine")) else paste("cyCombine was not installed in this session, so the batch factor has a single level here; its paired effect is reported in the full-run version of this document.")`
 * **Weighting.** The oracle weights give `r sprintf("%+.3f", eff("weighting", "sqrt_eta2"))`
   on average, but see the top lists: the gain comes from rescuing poor scalings,
   not from improving good ones.
@@ -1923,8 +1933,16 @@ squares; the design is slightly unbalanced because `flat_150` has no cyCombine
 arm, so treat it as a rough ranking, not as an exact decomposition):
 
 ```{r stage1-anova}
-fit <- lm(ari ~ cofactor + batch + scaling + weighting + distance +
-              scaling:distance + weighting:distance + cofactor:batch, data = stage1)
+## Only terms whose factors actually vary enter the model: when cyCombine is
+## not installed, `batch` has a single level and lm() refuses a constant
+## factor (and the cofactor:batch interaction with it).
+fac_levels <- vapply(c("cofactor", "batch", "scaling", "weighting", "distance"),
+                     function(f) length(unique(stage1[[f]])) > 1L, NA)
+an_terms <- c(names(fac_levels)[fac_levels], "scaling:distance", "weighting:distance")
+if (fac_levels[["cofactor"]] && fac_levels[["batch"]]) {
+    an_terms <- c(an_terms, "cofactor:batch")
+}
+fit <- lm(reformulate(an_terms, response = "ari"), data = stage1)
 an <- anova(fit)
 an$pct_of_total_SS <- round(100 * an[["Sum Sq"]] / sum(an[["Sum Sq"]]), 1)
 an[, c("Df", "Sum Sq", "pct_of_total_SS")]
@@ -2225,9 +2243,11 @@ verdict <- data.frame(
         sprintf("Mean |dARI| from centring by distance: %s. scaling:distance = %.1f%% of SS vs scaling = %.1f%%.",
                 paste(names(tw_abs), round(tw_abs, 3), collapse = ", "),
                 an["scaling:distance", "pct_of_total_SS"], an["scaling", "pct_of_total_SS"]),
-        sprintf("Paired dARI: cyet_donor %+.3f (mean ari_donor %.3f), cyCombine %+.3f; best label-free config uses batch = %s.",
+        sprintf("Paired dARI: cyet_donor %+.3f (mean ari_donor %.3f)%s; best label-free config uses batch = %s.",
                 eff("cofactor", "cyet_donor"), mean(s$ari_donor[s$cofactor == "cyet_donor"]),
-                eff("batch", "cyCombine"), best_lf$batch),
+                if (have_cycombine) sprintf(", cyCombine %+.3f", eff("batch", "cyCombine")) else
+                    " (cyCombine not installed in this session)",
+                best_lf$batch),
         sprintf("Best oracle ARI %.4f vs best label-free %.4f (difference %+.4f, noise band %.3f); mean paired gain of sqrt_eta2 %+.3f.",
                 best_or$ari, best_lf$ari, best_or$ari - best_lf$ari, noise_band, eff("weighting", "sqrt_eta2"))),
     verdict = c(
@@ -2284,6 +2304,106 @@ Things to keep in mind when interpreting:
   bimodality-based) to `apply_weights()`, add other scalings to
   `apply_scaling()`, or test whether the CCR7 donor offsets follow the fluorophore
   swap (donors 1-4 vs 5-7).
+
+## CySA on the labelled data: nodes against the known gating
+
+Everything above judged whole pipelines with global numbers: ARI against the
+known gating, mean node purity, the share of ambiguous cells. That is the
+batch view; it says how good a pipeline is, not *where* it goes wrong. The
+interactive view is per node: which nodes mix two labels, how close their
+cells sit to a rival node, and what to do about them. This section runs
+CySA's own functions on the anchor SOM to show the bridge. No new method is
+introduced; the point is that the object CySA expects -- an SCE with
+`SOM_codes`, `SOM_stats` and `cluster_id` -- is exactly what this document
+already builds, and the known gating plugs in as one extra column.
+
+```{r cysa-sce}
+#' Anchor SOM once, packaged the way the CyDa pipeline hands it to CySA.
+cysa_anchor <- cached("cysa_anchor_som.rds", local({
+    Xbase <- get_base("paper", "none")
+    X <- prepare_X(Xbase, "none", "none")
+    set.seed(1234)
+    som  <- FlowSOM::SOM(X, xdim = 10, ydim = 10, rlen = 10, mst = 1, distf = 2, silent = TRUE)
+    node <- assign_nodes(X, som$codes, 2)
+    list(som = som, node = node, X = X)
+}), csv = FALSE)
+som <- cysa_anchor$som; node <- cysa_anchor$node; X <- cysa_anchor$X
+
+rownames(som$codes) <- as.character(seq_len(nrow(som$codes)))
+sce <- SingleCellExperiment::SingleCellExperiment(
+    assays = list(exprs = t(X)),
+    colData = S4Vectors::DataFrame(
+        sample_id = paste0("donor", donor),
+        cluster_id = factor(node, levels = seq_len(nrow(som$codes))),
+        cell_type = pop
+    )
+)
+S4Vectors::metadata(sce)$SOM_codes <- som$codes
+S4Vectors::metadata(sce)$map <- list(colsUsed = type_m)
+SingleCellExperiment::int_metadata(sce)$channels <-
+    S4Vectors::DataFrame(channel_name = type_m, marker_name = type_m)
+```
+
+`cell_type` is the only addition over the CyDa layout: the known gating, read
+back into the object, so every SOM node can be scored against it.
+`prepClusterSelectorData(..., cellTypeCol = "cell_type")` derives the per-node
+label summary (`node_labels`: majority label and purity) on the *full* object
+and draws the stratified subsample the app's plots use. The tables show the
+two ends of the purity ranking:
+
+```{r cysa-prep}
+prepped <- CySA::prepClusterSelectorData(sce, total_cells_to_sample = 50000,
+    cellTypeCol = "cell_type")
+nl <- S4Vectors::metadata(prepped$sce)$node_labels
+n_pure  <- sum(nl$purity >= 0.95, na.rm = TRUE)
+n_mixed <- sum(nl$purity < 0.90, na.rm = TRUE)
+head(nl[order(-nl$purity), ])
+mixed <- nl[!is.na(nl$purity) & nl$purity < 0.90, ]
+mixed[order(mixed$purity), ]
+```
+
+`r n_pure` of the `r nrow(nl)` nodes are essentially pure (purity >= 0.95) and
+`r n_mixed` fall below 0.90; purity is NA for the nodes the dev subsample left
+empty. Pure nodes are the expectation: a 100-node SOM on well-separated
+cytometry populations places most nodes inside one population. The mixed rows
+are the interesting ones, and this document's earlier diagnostics predict
+where they come from: the naive -> memory -> TEMRA axis is a continuum, so its
+boundary nodes mix adjacent subsets no matter how the grid is laid out; the
+mis-routing diagnostics showed the largest cell-level pull comes from dim,
+variable CD56 on T cells (with CD8 next); and the CCR7/HELIOS fluorophore swap
+gives donors 5-7 a different CCR7 pedestal, so nodes that separate naive from
+memory partly split by donor instead. Five of the six mixed nodes are
+naive/TEMRA boundary nodes, and in all five the majority label flips between
+donor groups: the pedestal shift moves the same node to one side of the
+continuum in donors 1-4 and to the other in donors 5-7. A donor-split node can
+also be label-pure but cohort-split; those do not show in this table (their
+label purity is 1) but appear in the marker views below as same-label nodes
+sitting at different CCR7 positions.
+
+```{r cysa-views, fig.width = 8, fig.height = 6.2}
+p1 <- CySA::plotSOMScatter(prepped$sce, chs = c("CCR7", "CD45RA"),
+    color_by = "purity")
+show_plot(p1, "cysa_som_ccr7_cd45ra_purity", 7, 6.5)
+
+p2 <- CySA::plotNodeProps(prepped$sce,
+    ambiguity = CySA::nodeAmbiguity(prepped$sce_subsampled))
+show_plot(p2, "cysa_node_properties", 8, 6)
+```
+
+The first view is what the app's SOM 2D plots show: every node at its
+CCR7 x CD45RA position, coloured by purity, sized by cell count. Nodes with
+purity ~ 1 are single known populations; the low-purity ones sit where the
+continuum runs and where the donor pedestal shifts CCR7. The second view is
+the node-properties plane (purity against cell count, with the ambiguity
+columns `medianRatio`/`pctAmbiguous` computed by `nodeAmbiguity()` and joined
+by node id). This is the operational answer to the usefulness question: the
+analyst does not scroll through 100 nodes one by one -- they look at the
+low-purity / high-ambiguity corner, lasso those nodes (in the app this plot
+is wired to the node selection, so a lasso there selects nodes everywhere),
+and investigate them in the marker views. The decision that follows --
+drop a marker, refine the SOM below a node, or accept the mixed node as the
+honest boundary of the continuum -- is exactly the hierarchical refinement
+this document's diagnostics motivated.
 
 ## Output manifest and session information
 
