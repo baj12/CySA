@@ -1,3 +1,31 @@
+# CySA 0.99.41
+
+## New features
+
+- Known cell types can now feed the app end to end. `prepClusterSelectorData()`
+  and `prepClusterSelector()` accept a new `cellTypeCol` argument naming a
+  colData column of per-cell labels; when given, each SOM node is scored
+  against those labels: `metadata(sce)$node_labels` gains a data frame keyed
+  by node with the node's majority label (`cell_type_majority`) and the share
+  of its labeled cells carrying that label (`purity`), with `NA` for nodes
+  holding no labeled cells. The label column is also carried onto the
+  subsample. Independently of labels, `metadata(sce)$SOM_stats` gains a
+  `node_dispersion` column -- the mean within-node marker SD, in the same
+  cost class as the existing per-node stats.
+- New `nodeAmbiguity()` computes, per node on the subsample, how close its
+  cells sit to rival nodes (`medianRatio`, `pctAmbiguous`) -- the
+  label-free counterpart of a mixed node.
+- New `plotNodeProps()` draws the node-properties plane: node purity against
+  cell count, joined with the ambiguity columns when provided. In the app it
+  is a selectable plot box -- a lasso or click there selects nodes everywhere
+  -- and when labels are present it offers selection by purity threshold.
+- With labels present, the SOM 2D plots offer purity and the node's majority
+  label among their color and size choices.
+- `vignettes/spectral_flow_case_detailed_study.Rmd` gains a closing section
+  running these functions on the case study's anchor SOM: the known gating
+  plugs in as one colData column, and the section shows the bridge from the
+  document's global pipeline metrics to the per-node interactive view.
+
 # CySA 0.99.40
 
 ## New features

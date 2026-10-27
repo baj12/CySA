@@ -234,7 +234,7 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
         # Categorical property column (e.g. the known-label majority): map
         # every level to a Set2 colour, cycled when there are more levels
         # than the palette holds; unknown values render grey.
-        levs <- unique(na.omit(df[[colVar]]))
+        levs <- unique(stats::na.omit(df[[colVar]]))
         pal <- RColorBrewer::brewer.pal(max(3, min(8, length(levs))), "Set2")
         out$scale <- ggplot2::scale_color_manual(
             values = stats::setNames(

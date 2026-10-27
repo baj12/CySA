@@ -61,6 +61,12 @@ their plotly \code{key}: clicks and lasso selections made in the Shiny
 app resolve to nodes through the same selection pipeline as the other 2D
 plots.
 }
+\examples{
+sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
+plotNodeProps(prepped$sce)
+
+}
 \seealso{
 \code{\link{nodeAmbiguity}},
 \code{\link{prepClusterSelectorData}}

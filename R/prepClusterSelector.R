@@ -253,7 +253,7 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
             "' has no non-missing values")
     }
     nNodes <- nrow(S4Vectors::metadata(sce)[[somCodesName]])
-    clusterId <- suppressWarnings(as.integer(as.character(cd$cluster_id)))
+    clusterId <- as.integer(as.character(cd$cluster_id))
     ok <- !is.na(labels) & !is.na(clusterId) &
         clusterId >= 1L & clusterId <= nNodes
     out <- data.frame(
@@ -703,21 +703,8 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
         stop("SCE file not found: ", somFile)
     }
     if (file.exists(outFile) && !force) {
-        if (!is.null(cellTypeCol)) {
-            # The bundle predates the label stats: apply them to the loaded
-            # bundle and re-save it with the same field names.
-            say("Output exists; applying label stats to the bundle")
-            load(outFile)
-            sce <- .applyLabelStats(sce, cellTypeCol, somCodesName, assay)
-            sce_subsampled <- .mergeLabelsIntoSubsample(sce_subsampled,
-                sce, cellTypeCol, total_cells_to_sample, somCodesName,
-                seed)
-            save(sce, sce_subsampled, outputList, dList, dend_obj,
-                dend_table, clusterPatientTable, somRasterData,
-                somRasterObj, file = outFile, compress = FALSE)
-            return(currentRoot)
-        }
-        say("Output exists and force = FALSE; returning currentRoot")
+        .applyLabelStatsToBundle(outFile, cellTypeCol, somCodesName, assay,
+            total_cells_to_sample, seed, say)
         return(currentRoot)
     }
     if (is.null(sce)) {
@@ -730,13 +717,9 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
     sce_subsampled <- sub$sce_subsampled
     dList <- sub$dList
     say("Building cluster patient table")
-    sce$cluster_id <- factor(
-        as.character(SingleCellExperiment::colData(sce)[[clusterColName]]),
-        levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
-    )
-    clusterPatientTable <- table(as.data.frame(
-        SingleCellExperiment::colData(sce)[, c("sample_id", clusterColName)]
-    ))
+    ptab <- .clusterPatientTable(sce, clusterColName, somCodesName)
+    sce <- ptab$sce
+    clusterPatientTable <- ptab$table
     sce <- .prepSomSummaries(sce, somCodesName, assay, verbose, say)
     sce <- .applyLabelStats(sce, cellTypeCol, somCodesName, assay)
     say("Building SOM raster data")
@@ -755,6 +738,67 @@ prepClusterSelector <- function(currentRoot, sce = NULL, useColTree = FALSE,
         file = outFile, compress = FALSE)
     say("Saved: ", outFile)
     currentRoot
+}
+
+#' Apply Label Stats to an Existing prepClusterSelector() Bundle
+#'
+#' Early-return path of \code{prepClusterSelector()}: when the output bundle
+#' exists and \code{force} is FALSE, load it and, when \code{cellTypeCol} is
+#' given, apply the known-label node stats to the loaded bundle and re-save
+#' it with the same field names. Without \code{cellTypeCol} the bundle is
+#' returned untouched.
+#'
+#' @param outFile Path of the output bundle (\code{sce.shiny.RData}).
+#' @param cellTypeCol Column of \code{colData(sce)} holding known cell-type
+#'   labels, or \code{NULL}.
+#' @param somCodesName,assay,total_cells_to_sample,seed,say Passed to the
+#'   label-stat helpers as in \code{\link{prepClusterSelector}}.
+#'
+#' @return Nothing; called for its side effect on the bundle.
+#'
+#' @keywords internal
+.applyLabelStatsToBundle <- function(outFile, cellTypeCol, somCodesName,
+    assay, total_cells_to_sample, seed, say) {
+    if (is.null(cellTypeCol)) {
+        say("Output exists and force = FALSE; returning currentRoot")
+        return(invisible(NULL))
+    }
+    # The bundle predates the label stats: apply them to the loaded
+    # bundle and re-save it with the same field names.
+    say("Output exists; applying label stats to the bundle")
+    load(outFile)
+    sce <- .applyLabelStats(sce, cellTypeCol, somCodesName, assay)
+    sce_subsampled <- .mergeLabelsIntoSubsample(sce_subsampled,
+        sce, cellTypeCol, total_cells_to_sample, somCodesName,
+        seed)
+    save(sce, sce_subsampled, outputList, dList, dend_obj,
+        dend_table, clusterPatientTable, somRasterData,
+        somRasterObj, file = outFile, compress = FALSE)
+    invisible(NULL)
+}
+
+#' Sample x Cluster Count Table for prepClusterSelector()
+#'
+#' Factors \code{cluster_id} to the SOM-code count and tables
+#' sample x cluster; returns both the factored \code{sce} and the table
+#' because the factored \code{cluster_id} is part of the saved bundle state.
+#'
+#' @param sce The full SCE.
+#' @param clusterColName,somCodesName Column and metadata-slot names as in
+#'   \code{\link{prepClusterSelector}}.
+#'
+#' @return A list with \code{sce} (with factored \code{cluster_id}) and
+#'   \code{table} (the sample x cluster count table).
+#'
+#' @keywords internal
+.clusterPatientTable <- function(sce, clusterColName, somCodesName) {
+    sce$cluster_id <- factor(
+        as.character(SingleCellExperiment::colData(sce)[[clusterColName]]),
+        levels = seq_len(nrow(S4Vectors::metadata(sce)[[somCodesName]]))
+    )
+    list(sce = sce, table = table(as.data.frame(
+        SingleCellExperiment::colData(sce)[, c("sample_id", clusterColName)]
+    )))
 }
 
 #' Subsampled SCE for prepClusterSelector()

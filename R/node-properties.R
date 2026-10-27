@@ -39,6 +39,11 @@
 #' @seealso \code{\link{nodeAmbiguity}},
 #'   \code{\link{prepClusterSelectorData}}
 #'
+#' @examples
+#' sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+#' prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100)
+#' plotNodeProps(prepped$sce)
+#'
 #' @export
 plotNodeProps <- function(x, xVar = NULL, yVar = NULL,
     somCodesName = "SOM_codes", somStatsSlot = "SOM_stats",
@@ -56,6 +61,28 @@ plotNodeProps <- function(x, xVar = NULL, yVar = NULL,
             ambiguousThreshold = ambiguousThreshold, maxCells = maxCells)
     }
     labels <- S4Vectors::metadata(x)[[labelSlot]]
+    frame <- .nodePropsFrame(stats, labels, ambiguity, xVar, yVar)
+    .nodePropsPlot(frame$df, frame$xVar, frame$yVar, selectedIds)
+}
+
+#' Assemble the Node-Properties Data Frame
+#'
+#' Joins \code{SOM_stats} with the known-label node summary (when present)
+#' and the ambiguity summary, resolves the axis columns (defaults: purity x
+#' node size when purity is available, medianRatio x node size otherwise),
+#' validates that the axes are numeric columns, and builds the hover text.
+#'
+#' @param stats The per-node statistics data frame (\code{SOM_stats}).
+#' @param labels The known-label node summary, or \code{NULL}.
+#' @param ambiguity The per-node ambiguity summary data frame.
+#' @param xVar,yVar Requested axis column names, or \code{NULL} for the
+#'   defaults.
+#'
+#' @return A list with \code{df} (the joined data frame with a \code{text}
+#'   hover column), \code{xVar} and \code{yVar} (resolved axis names).
+#'
+#' @keywords internal
+.nodePropsFrame <- function(stats, labels, ambiguity, xVar, yVar) {
     df <- stats
     if (!is.null(labels)) {
         df <- left_join(df, labels, by = "id")
@@ -89,6 +116,24 @@ plotNodeProps <- function(x, xVar = NULL, yVar = NULL,
             "<br>majority: ", df$cell_type_majority)
     }
     df$text <- hover
+    list(df = df, xVar = xVar, yVar = yVar)
+}
+
+#' Render the Node-Properties ggplot
+#'
+#' Scatter of one point per node: coloured by purity when the column is
+#' present, plain blue otherwise; selected node ids are overplotted in
+#' red.
+#'
+#' @param df The assembled node-properties data frame (from
+#'   \code{\link{.nodePropsFrame}}).
+#' @param xVar,yVar Resolved axis column names.
+#' @param selectedIds Integer node ids to highlight in red.
+#'
+#' @return A \code{ggplot} object.
+#'
+#' @keywords internal
+.nodePropsPlot <- function(df, xVar, yVar, selectedIds) {
     p <- ggplot(df, aes(x = .data[[xVar]], y = .data[[yVar]],
         key = .data$id, text = .data$text))
     if ("purity" %in% colnames(df)) {

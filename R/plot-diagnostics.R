@@ -404,6 +404,11 @@ computeClusterAmbiguity <- function(sce, somCodes, markers = NULL,
 #'   \code{meanDistToCode}, \code{medianRatio}, and \code{pctAmbiguous},
 #'   ordered by \code{id}.
 #'
+#' @examples
+#' sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+#' amb <- nodeAmbiguity(sce)
+#' head(amb)
+#'
 #' @export
 nodeAmbiguity <- function(sce, somCodesName = "SOM_codes", markers = NULL,
     ambiguousThreshold = 0.9, maxCells = 20000, seed = 1) {

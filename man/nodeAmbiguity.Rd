@@ -42,3 +42,9 @@ the full distance matrix never materializes); its cost scales with
 sampled cells times nodes, so pass a subsample or a precomputed summary
 for very large objects. Nodes absent from the sample have no row.
 }
+\examples{
+sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+amb <- nodeAmbiguity(sce)
+head(amb)
+
+}
