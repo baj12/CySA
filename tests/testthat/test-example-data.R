@@ -23,6 +23,20 @@ test_that("CySA_example_sce() respects n_cells and n_nodes", {
   expect_equal(nrow(SummarizedExperiment::assay(sce, "exprs")), 8)
 })
 
+test_that("CySA_example_sce adds a cell_type column from cell_types", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("type", rep(1:5, length.out = 10)))
+  expect_true("cell_type" %in% colnames(SingleCellExperiment::colData(sce)))
+  cd <- as.data.frame(SingleCellExperiment::colData(sce))
+  expect_identical(as.character(cd$cell_type),
+    paste0("type", rep(1:5, length.out = 10))[as.integer(cd$cluster_id)])
+})
+
+test_that("CySA_example_sce without cell_types is unchanged", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  expect_false("cell_type" %in% colnames(SingleCellExperiment::colData(sce)))
+})
+
 test_that("CySA_default_cluster_cols() returns a non-empty character vector", {
   cols <- CySA_default_cluster_cols()
   expect_type(cols, "character")

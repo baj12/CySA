@@ -11,6 +11,10 @@
 #' @param n_cells Number of cells (columns).
 #' @param n_nodes Number of SOM nodes.
 #' @param n_markers Number of markers (rows).
+#' @param cell_types Optional character vector of length \code{n_nodes}
+#'   giving a known cell type per node; when supplied, the colData gains a
+#'   \code{cell_type} column carrying \code{cell_types[cluster_id]} per cell
+#'   (per-cell known labels for testing the labeled workflows).
 #'
 #' @return A \code{\link[SingleCellExperiment]{SingleCellExperiment}} with
 #'   \code{SOM_codes}, \code{SOM_stats}, \code{sample_id}, and
@@ -21,7 +25,8 @@
 #' head(S4Vectors::metadata(sce)$SOM_codes)
 #'
 #' @export
-CySA_example_sce <- function(n_cells = 1000, n_nodes = 50, n_markers = 12) {
+CySA_example_sce <- function(n_cells = 1000, n_nodes = 50, n_markers = 12,
+    cell_types = NULL) {
     markers <- paste0("marker", seq_len(n_markers))
 
     counts <- matrix(
@@ -38,6 +43,13 @@ CySA_example_sce <- function(n_cells = 1000, n_nodes = 50, n_markers = 12) {
         sample_id = sample_ids,
         cluster_id = factor(cluster_ids, levels = seq_len(n_nodes))
     )
+    if (!is.null(cell_types)) {
+        cell_types <- as.character(cell_types)
+        if (length(cell_types) != n_nodes) {
+            stop("'cell_types' must have one entry per SOM node")
+        }
+        cd$cell_type <- unname(cell_types[as.integer(cluster_ids)])
+    }
 
     sce <- SingleCellExperiment::SingleCellExperiment(
         assays = list(exprs = counts),
