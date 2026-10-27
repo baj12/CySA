@@ -27,6 +27,17 @@
     ),
     somColorVar = "Statistic used to colour SOM nodes in the 2D plots.",
     somSizeVar = "Statistic used to scale SOM node points in the 2D plots.",
+    nodePropsX = paste(
+        "Per-node property for the X axis of the node-properties 2D plot",
+        "(purity when known labels are available)."
+    ),
+    nodePropsY = paste(
+        "Per-node property for the Y axis of the node-properties 2D plot."
+    ),
+    nodeProps = paste(
+        "2D view of the SOM nodes against two per-node properties",
+        "(purity, ambiguity, size, statistics); click or lasso to select."
+    ),
     clusterNumbers = paste(
         "Comma-separated SOM node ids to add to the current selection."
     ),
@@ -302,6 +313,70 @@
     list(
         colorStats = c(base, "purity", "cell_type_majority"),
         sizeStats = c(base, "purity")
+    )
+}
+
+#' Node Property Choices for the Node-Properties 2D Plot
+#'
+#' Numeric property columns usable as axes of the node-properties 2D plot:
+#' every numeric \code{SOM_stats} column except \code{id}, plus
+#' \code{purity} when \code{node_labels} exists, plus the per-node
+#' ambiguity columns (computed per session by the server).
+#'
+#' @param md The metadata (as a list) of the full SCE.
+#' @param somCodesName Name of the SOM codes metadata slot (unused, kept
+#'   for call-site symmetry).
+#'
+#' @return A character vector of column names.
+#'
+#' @keywords internal
+.nodePropertyChoices <- function(md, somCodesName = "SOM_codes") {
+    stats <- md[["SOM_stats"]]
+    numericCols <- if (!is.null(stats)) {
+        setdiff(names(stats)[vapply(stats, is.numeric, logical(1))], "id")
+    } else {
+        character(0)
+    }
+    choices <- unique(c(numericCols, "meanDistToCode", "medianRatio",
+        "pctAmbiguous"))
+    if (!is.null(md$node_labels) && "purity" %in% colnames(md$node_labels)) {
+        choices <- c(choices, "purity")
+    }
+    choices
+}
+
+#' Node-Properties 2D Plot Box
+#'
+#' Interactive (plotly) box next to the SOM 2D plots: one point per SOM
+#' node, axes chosen among the per-node property columns. Selection clicks
+#' and lassos feed the same selection pipeline as the other 2D plots.
+#'
+#' @param propChoices Character vector of numeric property columns.
+#' @param hasLabels \code{TRUE} when the \code{node_labels} slot exists
+#'   (enables \code{purity} as default x axis).
+#'
+#' @return A \code{shinydashboardPlus::box} UI object.
+#'
+#' @keywords internal
+.buildNodePropsBox <- function(propChoices, hasLabels) {
+    hint <- .selectionHint(
+        "Tip: click or lasso points to select SOM nodes. Selection mode is",
+        "controlled from the sidebar."
+    )
+    .primaryBox(
+        "Node properties 2D plot", width = 12L, infoId = "nodeProps",
+        shiny::fluidRow(
+            .tipColumn(4L, "nodePropsX", shiny::selectInput("nodePropsX",
+                "Node properties: x axis", choices = propChoices,
+                selected = if (hasLabels) "purity" else "medianRatio",
+                multiple = FALSE, selectize = TRUE, width = "100%")),
+            .tipColumn(4L, "nodePropsY", shiny::selectInput("nodePropsY",
+                "Node properties: y axis", choices = propChoices,
+                selected = "n", multiple = FALSE, selectize = TRUE,
+                width = "100%"))
+        ),
+        shiny::fluidRow(shiny::column(width = 12L, hint,
+            .resizable(plotly::plotlyOutput("nodePropsPlot"))))
     )
 }
 

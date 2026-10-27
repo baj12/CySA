@@ -102,6 +102,8 @@
                 .buildRidgeBox(metaD[[somCodesName]], colsUsed),
                 .buildSOM2DPlotsBox(nPlots, colsUsed, outputList,
                     markers = rnSCE, dList = dList),
+                .buildNodePropsBox(.nodePropertyChoices(metaD),
+                    hasLabels = !is.null(metaD$node_labels)),
                 .buildSixStaticSOMBox(markers = rnSCE, dList = dList),
                 .buildFlowSOMPieBox(),
                 .buildFlowSOMStarsBox(fsom),

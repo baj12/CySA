@@ -134,6 +134,32 @@ test_that("somStatChoices exposes label columns only when labels exist", {
 })
 
 # ══════════════════════════════════════════════════════════════════════════════
+# .buildNodePropsBox / .nodePropertyChoices (node-properties box)
+# ══════════════════════════════════════════════════════════════════════════════
+
+test_that("node properties box renders and prunes label choices", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  box1 <- .buildNodePropsBox(.nodePropertyChoices(S4Vectors::metadata(sce)),
+    hasLabels = FALSE)
+  expect_s3_class(box1, "shiny.tag")
+  txt <- paste(capture.output(print(box1)), collapse = "")
+  expect_true(grepl("nodePropsX", txt))
+  expect_true(grepl("nodePropsY", txt))
+  expect_true(grepl("nodePropsPlot", txt))
+  # no purity among the axis choices (tooltips may still mention the word)
+  expect_false(grepl("<option value=\"purity\"", txt))
+  sce2 <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", 1:10))
+  prepped <- prepClusterSelectorData(sce2, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")
+  box2 <- .buildNodePropsBox(
+    .nodePropertyChoices(S4Vectors::metadata(prepped$sce)),
+    hasLabels = TRUE)
+  txt2 <- paste(capture.output(print(box2)), collapse = "")
+  expect_true(grepl("<option value=\"purity\"", txt2))
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
 # validate-inputs
 # ══════════════════════════════════════════════════════════════════════════════
 
