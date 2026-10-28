@@ -64,5 +64,8 @@ CySA.proj
 ^testfile$
 ^vignettes/spectral_analysis/
 ^vignettes/spectral_analysis_dev/
+^vignettes/spectral_analysis_refine/
+^vignettes/refine_engine\.R$
+^vignettes/refinement_experiment\.Rmd$
 ^vignettes/41598_2025_Article_12153\.pdf$
 ^vignettes/41598_2025_12153_MOESM1_ESM\.docx$

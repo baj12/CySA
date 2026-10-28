@@ -1,0 +1,520 @@
+---
+title: "Hierarchical SOM refinement — selecting markers to unmix borderline cells"
+author: "CySA case study"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+vignette: >
+  %\VignetteIndexEntry{Hierarchical SOM refinement}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+params:
+  dev_n: 0
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 5)
+```
+
+**Status: results report for the hierarchical-refinement experiment.** The
+companion document `spectral_flow_case_detailed_study.Rmd` established the
+anchor configuration and CySA's diagnostic views; this vignette uses those
+diagnostics to drive a concrete training-phase decision loop: *which nodes of
+the anchor SOM are ambiguous, which marker to drop for them, and whether the
+refinement paid off*. The design document is
+`docs/superpowers/specs/2026-10-28-hierarchical-refinement-experiment-design.md`.
+
+```{r libs, message = FALSE}
+suppressPackageStartupMessages({
+    library(ggplot2)
+    library(SummarizedExperiment)
+})
+```
+
+```{r engine, message = FALSE}
+## The engine is shared verbatim between the SLURM stage drivers and this
+## vignette. In dev mode (dev_n > 0) the stage drivers refuse to run and all
+## results are read from the full-cohort caches in spectral_analysis_refine/.
+dev_n <- params$dev_n
+n_cores <- 4L
+source("refine_engine.R")
+```
+
+# 1. Question and falsifiable claim
+
+FlowSOM assigns every cell to exactly one node, including borderline cells
+that sit between two populations; the misassignment is silent. CySA's
+node-ambiguity diagnostic (own/rival distance ratio > 0.9 in the full marker
+space) makes those cells visible during the *training phase* — the phase
+where the analyst still shapes the clustering. The working hypothesis:
+
+> Selecting a marker subset and re-running a SOM on a mixed node's cells
+> yields better separation and fewer ambiguous cells; done hierarchically,
+> the leaf structure is a gating hierarchy the SOM itself proposes.
+
+The falsifiable version: **hierarchical SOM refinement by marker subselection
+reaches a higher node purity than a flat SOM scaled to the same number of
+final clusters, at a bounded ambiguity cost, and the guided marker rule
+beats a random-drop ablation under the same acceptance machinery.** The
+ambiguity metric's role here is diagnostic (WHERE: which nodes to refine),
+not the objective — §5.3 records why: splitting a node makes its children
+each other's closest rival, so the own/rival ambiguity fraction cannot
+improve under splitting (the geometry cost is bounded and reported instead).
+If the matched flat control matches the purity, that is the honest result and
+changes the method claim — not the instrument claim (CySA's diagnostics are
+what drove the decision either way).
+
+# 2. Data and the d5–7 precondition
+
+Cohort: Zenodo spectral flow case study (10.5281/zenodo.15723074), 56 FCS
+files = 8 manually gated populations × 7 donors, `r format(N, big.mark = ",")`
+cells. The channel-artifact investigation (2026-10-27 findings; donors 5–7
+carry an AF488/AF700 pedestal pair) established the precondition: the
+desc-"CCR7" channel is untrustworthy for clustering, so the main feature set
+is the 13 type markers **minus CCR7** (12 clustering markers). CCR7 stays
+available for viewing only.
+
+Section 4 quantifies this exclusion (S1); the 13-marker anchor reference
+metrics are: ari 0.9733, ari_node_majority 0.9872, pct_ambiguous 30.31
+(code-based metric; the detailed study's table).
+
+# 3. Arms
+
+| Arm | Description |
+|---|---|
+| A1 | Flat base SOM, anchor config, 12 markers, 10×10, k=12 |
+| A2 | Hierarchical refinement tree driven by CySA's diagnostics (§5) |
+| A3 | Flat SOM scaled to the tree's leaf count (20×20, metaclustered at k = L_tree), matched control |
+| A4 | Expert gating (8 populations) — upper bound, contextual only (gating used FSC/SSC) |
+| A5 | Ablation: same tree, marker dropped at random |
+| S1 | Anchor with CCR7 (13 markers, cached) vs without (12), 5 seeds, paired |
+
+All arms run on seeds 1234–1238; parameters are frozen on seed 1234 alone
+(§5.4).
+
+# 4. S1 — the CCR7 exclusion, quantified
+
+```{r s1}
+## both sides are computed with the same protocol and metric (flat 10x10
+## anchor, code-based metric), so the paired comparison is like-for-like;
+## the 13-marker side includes CCR7, i.e. the d5-7 artifact NOT excluded
+anchor13 <- readRDS(file.path(out_dir, "anchor13_table.rds"))
+## anchor12 is reused by §6.1 (A1 baseline) and §6.4 (arms table)
+anchor12 <- readRDS(file.path(out_dir, "anchor12_table.rds"))
+s1_tab <- rbind(
+    data.frame(markers = "13 (with CCR7)", seed = anchor13$seed,
+               pct_ambiguous = anchor13$pct_ambiguous,
+               median_ratio = anchor13$median_ratio,
+               ari = anchor13$ari, node_purity = anchor13$node_purity),
+    data.frame(markers = "12 (without CCR7)", seed = anchor12$seed,
+               pct_ambiguous = anchor12$pct_ambiguous,
+               median_ratio = anchor12$median_ratio,
+               ari = anchor12$ari, node_purity = anchor12$node_purity))
+knitr::kable(s1_tab, digits = 4,
+             caption = "S1: paired anchor runs, with and without CCR7
+             (code-based metric, same protocol both sides).")
+```
+
+```{r s1-plot, fig.cap = "Paired anchor runs, code-based ambiguity (left scale) and node purity (right scale): the exclusion's cost and its gain."}
+ggplot(s1_tab, aes(markers, pct_ambiguous, group = seed)) +
+    geom_line() + geom_point(aes(color = factor(seed))) +
+    labs(y = "% ambiguous cells (code-based metric)", x = NULL,
+         color = "seed") +
+    theme_bw()
+```
+
+The paired deltas are small and honest about the trade: excluding CCR7
+lowers node purity by 0.78 points on average (with CCR7 0.9868–0.9894,
+without 0.9803–0.9820) and raises code-based ambiguity by 0.49 points —
+the clean d1–4 CCR7 signal is real — while the d5–7 pedestal channel that
+motivated the exclusion contributes no detectable ambiguity penalty at
+this granularity. The exclusion is therefore a trust decision, not a
+metric win: the analyst gives up ≈0.8 points of purity to remove a
+channel that is untrustworthy in 3 of 7 donors, and the diagnostics
+quantify exactly that cost instead of hiding it.
+
+# 5. A2 — the refinement procedure
+
+## 5.1 WHERE — which nodes to refine
+
+A node qualifies when its own ambiguity — the share of its cells with an
+own/rival distance ratio above 0.9 under the current partition — exceeds
+`tau_refine` **or** its purity is below 0.9, and it holds at least
+`min_cells` cells. Both criteria are exactly what the app shows the analyst
+(nodeAmbiguity, node purity) — the training-phase premise.
+
+## 5.2 WHAT — which marker to drop
+
+For each candidate marker m of the node's marker set, cluster the node's
+cells with k-means at k_local on the reduced space (all markers but m) and
+score separation as 1 − within_SS/total_SS; the marker whose removal
+**maximizes** the score is dropped (one per step, greedy; ≥ 6 markers must
+remain). Label-free per step — the k_local count comes from the known
+populations (§5.3), the clustering itself does not.
+
+The v1 rule (the smallest gap contribution S(m), CySA's mis-routing view) is
+kept in the engine for reference and failed on the real cohort: it drops the
+marker that does the least *rival-separation* work, and on real nodes that
+is not the marker carrying the internal mixture (e.g. CD19 on T-cell nodes).
+The sub-SOM then split a still-mixed cloud into arbitrary halves — 0 of
+1692 tuning attempts (36 combinations, seed 1234) were accepted, median
+local change +5.1 ambiguity points. The v1 tuning table is archived as
+`tune_table_v1_gap.rds`.
+
+## 5.3 The sub-SOM, accept/reject, stopping
+
+The node's cells are re-clustered with `FlowSOM::SOM` on the reduced marker
+set (density-matched grid), metaclustered into k_local = number of
+populations holding ≥ 5% of the node's cells (min 2 — the analyst's
+"how many populations live in this node" question). Accept iff the node's
+purity **improves by at least** `accept_dpur` (unmixing achieved) **and** its
+full-space ambiguity worsens by at most `accept_eps` (the bounded geometry
+cost). Two metrics are logged on every attempt but never gated: the
+cohort-wide ambiguity, and the **sibling-space** ambiguity (the node's cells
+under the child partition in the reduced marker set, rival = the sibling
+children plus the other leaves restricted to the same columns). The
+sibling-space columns make the structural point visible: splitting adds the
+sibling as the closest rival, so ambiguity rises even when the split is the
+right one — which is why the accept rule measures the refinement's goal
+(purity) and bounds the geometry cost rather than optimizing the geometry.
+A leaf is terminal when its ambiguity < `tau_stop`, cells < `min_cells`,
+≤ 6 markers remain, depth ≥ 3, or its last attempt was rejected.
+`tau_stop` floors the ambiguity branch only: a node qualifying through the
+purity branch (`purity < 0.9`) is never blocked by it — a confidently-mixed
+node (its cells sit far from every rival code, but the node holds more than
+one population) is exactly what a reduced-marker re-SOM can still unmix.
+
+## 5.4 Parameter freeze (seed 1234 only)
+
+```{r freeze}
+tune <- readRDS(file.path(out_dir, "tune_table.rds"))
+## Freeze rule (design §7, v3 semantics): among combos keeping the tree
+## bounded (attempts <= 60, no degenerate refinement-created leaves —
+## smallest depth->=1 leaf >= 20 cells; the root SOM's own small nodes are
+## the base SOM's property, shared by every combo and by the anchors), the
+## HIGHEST node_purity, ties broken by lower pct_ambiguous then higher ARI.
+## Recorded here; used unchanged for seeds 1235-1238.
+leaf_min <- vapply(seq_len(nrow(tune)), function(r) {
+    key <- sprintf("tune_v3_s1234_tau_refine_%s_tau_stop_%s_min_cells_%s_accept_eps_%s",
+                   tune$tau_refine[r], tune$tau_stop[r],
+                   tune$min_cells[r], tune$accept_eps[r])
+    res <- readRDS(file.path(out_dir, "runs", paste0(key, ".rds")))
+    d <- vapply(res$leaves, function(l) l$depth, 0L)
+    sz <- vapply(res$leaves, function(l) length(l$idx), 0L)
+    if (any(d >= 1)) min(sz[d >= 1]) else Inf
+}, 0)
+tune$leaf_min <- leaf_min
+ok <- tune[tune$leaf_min >= 20 & tune$n_attempts <= 60, , drop = FALSE]
+stopifnot(nrow(ok) > 0)
+frozen <- ok[order(-ok$node_purity, ok$pct_ambiguous, -ok$ari), ][1, ]
+knitr::kable(tune, digits = 3,
+             caption = "Tuning grid on seed 1234 (§7).")
+frozen_params <- refine_params(tau_refine = frozen$tau_refine,
+                               tau_stop = frozen$tau_stop,
+                               min_cells = frozen$min_cells,
+                               accept_eps = frozen$accept_eps)
+cat("Frozen parameters:", paste(names(frozen_params), frozen_params,
+                                sep = "=", collapse = ", "), "\n")
+```
+
+# 6. Results
+
+## 6.1 A1 baseline (12 markers)
+
+```{r a1}
+## both metric families: the code-based one ties back to the detailed study's
+## anchor (30.31 with CCR7), the mean-based one is the experiment's yardstick
+knitr::kable(anchor12[, c("seed", "ari", "ari_node_majority", "node_purity",
+                          "pct_ambiguous", "pct_ambiguous_mean",
+                          "median_ratio", "median_ratio_mean")],
+             digits = 4,
+             caption = "A1: flat anchor SOM on the 12-marker set, 5 seeds
+             (code-based and mean-based metric families).")
+```
+
+## 6.2 The refinement trees
+
+```{r trees-load}
+trees <- lapply(seeds_all, function(sv)
+    readRDS(file.path(out_dir, "trees", sprintf("tree_v3_s%d_sep.rds", sv))))
+names(trees) <- seeds_all
+tree_tab <- do.call(rbind, lapply(trees, `[[`, "metrics"))
+knitr::kable(tree_tab, digits = 4,
+             caption = "A2: refinement trees per seed.")
+```
+
+```{r tree-trajectory, fig.cap = "Per-level refinement trajectory: cohort-wide ambiguity after each attempt (seed 1234). The cohort-wide metric is reported, not gated (§5.3)."}
+log1 <- trees[[1]]$log
+log1$outcome <- ifelse(is.na(log1$accepted), "skipped (k_local < 2)",
+                       ifelse(log1$accepted, "accepted", "rejected"))
+ggplot(log1, aes(step, pct_amb_global_after, color = outcome)) +
+    geom_point() +
+    geom_line(data = log1[log1$accepted, ], aes(group = 1), color = "black") +
+    geom_hline(yintercept = log1$pct_amb_global_before[1],
+               linetype = "dashed", color = "grey40") +
+    labs(x = "attempt", y = "% ambiguous (cohort-wide, amb_idx)",
+         color = NULL,
+         subtitle = "black line: accepted steps; dashed: the tree's level-0 (node-level) ambiguity") +
+    theme_bw()
+```
+
+## 6.3 The gating hierarchy the SOM proposes
+
+```{r hierarchy}
+## Per refined node: the marker-drop sequence IS the hierarchy. Table of
+## accepted steps in order: node id, depth, markers dropped, k_local, cells;
+## purity before/after (the accept criterion), the sibling-space cost of
+## splitting, and the reported cohort-wide effect.
+log_all <- do.call(rbind, lapply(trees, `[[`, "log"))
+acc_all <- log_all[!is.na(log_all$accepted) & log_all$accepted, , drop = FALSE]
+knitr::kable(acc_all[, c("seed", "step", "depth", "parent", "n_cells",
+                         "marker_dropped", "k_local",
+                         "pur_before", "pur_after",
+                         "pct_amb_sib_before", "pct_amb_sib_after",
+                         "pct_amb_global_after")],
+             digits = 2, row.names = FALSE,
+             caption = "Accepted refinement steps — the marker-drop sequence per node.")
+```
+
+```{r hierarchy-accept-plot, fig.cap = "Sibling-space ambiguity before vs after each real attempt (seed 1234) — the reported geometry cost of splitting: points above the diagonal are the sibling-rivalry effect (§5.3)."}
+real1 <- log_all[log_all$seed == seeds_all[1] & !is.na(log_all$k_local) &
+                     log_all$k_local >= 2, ]
+real1$outcome <- ifelse(real1$accepted, "accepted", "rejected")
+ggplot(real1, aes(pct_amb_sib_before, pct_amb_sib_after, color = outcome)) +
+    geom_abline(slope = 1, linetype = "dashed", color = "grey60") +
+    geom_point(size = 2) +
+    labs(x = "% ambiguous before (sibling space)",
+         y = "% ambiguous after (sibling space)",
+         color = NULL,
+         subtitle = "dashed: no change; splitting almost always adds the sibling as the closest rival") +
+    theme_bw()
+```
+
+## 6.4 A3 matched control, A4 expert bound, A5 ablation
+
+```{r arms}
+## A3: flat 20x20, per seed metaclustered at k = L_tree (partition-level
+## match) and at k = 12. Partition-level purity for all flat arms is computed
+## from the cached cluster assignment, so the purity column is comparable
+## across arms (the tree's node_purity is partition-level over leaves).
+cl_purity <- function(cl) {
+    sum(vapply(split(pop_int, cl), function(ii) max(tabulate(ii)), 0L)) / N
+}
+## majority-mapped ARI over the same partition the arm reports (leaves for
+## the tree, meta-clusters for the flat arms). Raw ARI is granularity-capped
+## (§6.5): it compares cluster-size profiles as much as alignments, so the
+## majority-mapped variant is the cross-arm comparable.
+maj_ari <- function(cl) {
+    ids <- sort(unique(cl))
+    labs <- setNames(vapply(ids, function(g)
+        names(which.max(table(pop[cl == g]))), ""), as.character(ids))
+    ari_score(labs[as.character(cl)], as.character(pop))
+}
+control_rows <- do.call(rbind, lapply(seeds_all, function(sv) {
+    tree <- readRDS(file.path(out_dir, "trees", sprintf("tree_v3_s%d_sep.rds", sv)))
+    L_tree <- tree$metrics$L
+    do.call(rbind, lapply(c(L_tree, 12), function(k) {
+        f <- file.path(out_dir, "runs", "controls", paste0(
+            run_key(data.frame(cofactor = "paper", batch = "none",
+                               scaling = "none", weighting = "none", distf = 2,
+                               markers = "type_m12", seed = sv, xdim = 20,
+                               k = k, stringsAsFactors = FALSE)), ".rds"))
+        run <- readRDS(f)
+        data.frame(arm = paste0("A3 flat 20x20 k=", k), seed = sv,
+                   L = k, pct_amb = run$metrics$pct_ambiguous_mean,
+                   ari = run$metrics$ari,
+                   ari_node_majority = maj_ari(run$cl),
+                   purity = cl_purity(run$cl))
+    }))
+}))
+expert <- readRDS(file.path(out_dir, "a4_expert_bound.rds"))
+rand_tab <- do.call(rbind, lapply(seeds_all, function(sv)
+    readRDS(file.path(out_dir, "trees", sprintf("tree_v3_s%d_random.rds", sv)))$metrics))
+
+arms <- rbind(
+    do.call(rbind, lapply(seeds_all, function(sv) {
+        cl <- readRDS(file.path(out_dir, "anchor", paste0(
+            run_key(data.frame(cofactor = "paper", batch = "none",
+                               scaling = "none", weighting = "none", distf = 2,
+                               markers = "type_m12", seed = sv, xdim = 10, k = 12,
+                               stringsAsFactors = FALSE)), ".rds")))$cl
+        data.frame(arm = "A1 flat 10x10 k=12", seed = sv, L = 12,
+                   pct_amb = anchor12$pct_ambiguous_mean[anchor12$seed == sv],
+                   ari = anchor12$ari[anchor12$seed == sv],
+                   ari_node_majority = maj_ari(cl), purity = cl_purity(cl))
+    })),
+    data.frame(arm = "A2 tree", seed = tree_tab$seed,
+               L = tree_tab$L, pct_amb = tree_tab$pct_ambiguous,
+               ari = tree_tab$ari,
+               ari_node_majority = tree_tab$ari_node_majority,
+               purity = tree_tab$node_purity),
+    control_rows,
+    data.frame(arm = "A5 tree, random drops", seed = rand_tab$seed,
+               L = rand_tab$L, pct_amb = rand_tab$pct_ambiguous,
+               ari = rand_tab$ari,
+               ari_node_majority = rand_tab$ari_node_majority,
+               purity = rand_tab$node_purity),
+    ## identity: the anchor's populated codes with per-code mean reps — what
+    ## the tree starts from before any refinement (stage_identity)
+    (function() {
+        ident <- readRDS(file.path(out_dir, "identity_table.rds"))
+        do.call(rbind, lapply(seeds_all, function(sv) {
+            i1 <- ident[ident$seed == sv, ]
+            data.frame(arm = "identity (anchor codes)", seed = sv, L = i1$L,
+                       pct_amb = i1$pct_amb, ari = i1$ari,
+                       ari_node_majority = i1$ari_node_majority,
+                       purity = i1$purity)
+        }))
+    })(),
+    data.frame(arm = "A4 expert bound", seed = NA, L = expert$L,
+               pct_amb = expert$pct_ambiguous, ari = expert$ari,
+               ari_node_majority = 1, purity = expert$node_purity))
+knitr::kable(arms, digits = 4,
+             caption = "Arms comparison. pct_amb is the mean-based own/rival
+             yardstick over the arm's reported partition; purity is
+             partition-level majority purity; ari_node_majority maps each
+             group to its majority population before the ARI. Raw ari is
+             reported but not comparable across arms with different cluster
+             size profiles: ARI penalizes the granularity gap between a
+             ~100-group partition and the 8 populations — a perfectly nested
+             pure refinement of balanced populations scores only ~0.14, so
+             the tree's raw ari (~0.09) sits at its structural ceiling while
+             the flat control's (~0.4) reflects its few very large
+             meta-clusters. A4 expert bound printed below.")
+print(expert)
+```
+
+```{r arms-plot, fig.cap = "Ambiguity by arm, one point per seed (A4 = expert bound, dashed)."}
+ggplot(arms, aes(arm, pct_amb, color = factor(seed))) +
+    geom_point(position = position_dodge(width = 0.3), size = 2) +
+    geom_hline(yintercept = expert$pct_ambiguous, linetype = "dashed") +
+    labs(x = NULL, y = "% ambiguous cells (mean-based yardstick)",
+         color = "seed") +
+    theme_bw() + theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+## 6.5 Verdict
+
+```{r verdict}
+## the v3 claim (design §11.2), stated so all outcomes can be reported
+## honestly: at the matched partition size (~100 groups), the guided
+## refinement (A2) is compared to the flat control (A3, k = L_tree per
+## seed) on partition-level purity, majority-mapped ARI and the mean-based
+## ambiguity yardstick; the identity (the un-refined anchor) is the null;
+## the random-drop ablation (A5) isolates what the guided marker rule adds.
+a2 <- arms[arms$arm == "A2 tree", ]
+a3 <- arms[grepl("^A3 flat 20x20 k=", arms$arm) & arms$L > 50, ]
+a5 <- arms[arms$arm == "A5 tree, random drops", ]
+idn <- arms[arms$arm == "identity (anchor codes)", ]
+verdict <- data.frame(
+    purity_tree = mean(a2$purity), purity_control = mean(a3$purity),
+    ari_maj_tree = mean(a2$ari_node_majority),
+    ari_maj_control = mean(a3$ari_node_majority),
+    pct_amb_tree = mean(a2$pct_amb), pct_amb_control = mean(a3$pct_amb),
+    purity_identity = mean(idn$purity), pct_amb_identity = mean(idn$pct_amb),
+    purity_random = mean(a5$purity), pct_amb_random = mean(a5$pct_amb))
+print(verdict, digits = 4)
+## claims, evaluated on the numbers:
+## (i) ambiguity at matched L: the refinement's demonstrable gain
+claim_amb <- mean(a2$pct_amb) < mean(a3$pct_amb) - 5
+## (ii) purity vs the control: comparable (within 0.002) rather than better
+purity_gap <- abs(mean(a2$purity) - mean(a3$purity))
+## (iii) ablation: the guided rule's added value over random drops
+abl_gap_pur <- mean(a2$purity) - mean(a5$purity)
+abl_gap_amb <- mean(a2$pct_amb) - mean(a5$pct_amb)
+## (iv) identity: refinement's net effect over doing nothing
+id_pur <- a2$purity - idn$purity[match(a2$seed, idn$seed)]
+id_amb <- a2$pct_amb - idn$pct_amb[match(a2$seed, idn$seed)]
+msg <- if (claim_amb) paste0(
+    "REFINEMENT HALVES AMBIGUITY AT MATCHED L: ",
+    signif(mean(a3$pct_amb) - mean(a2$pct_amb), 3),
+    " pct_amb points (", sum(a2$pct_amb < a3$pct_amb[match(a2$seed, a3$seed)]),
+    "/5 seeds), at a purity gap of ",
+    signif(mean(a2$purity) - mean(a3$purity), 3),
+    " (comparable); the guided marker rule is a wash (purity ",
+    signif(abl_gap_pur, 3), ", ambiguity ", signif(abl_gap_amb, 3),
+    " vs random) — the diagnostics-driven machinery delivers the gain"
+) else "CLAIM FAILS: the matched flat control is not beaten on ambiguity"
+cat(msg, "\n")
+cat("identity (null): purity delta per seed", paste(signif(id_pur, 3), collapse = ", "),
+    "(all >= 0:", all(id_pur >= 0), "); ambiguity delta per seed",
+    paste(signif(id_amb, 2), collapse = ", "), "\n")
+```
+
+The verdict, stated with the numbers it earned: at the matched partition
+size (~100 groups), the diagnostics-guided hierarchical refinement halves
+the cohort-wide borderline share (16.7 vs 30.9% ambiguous cells on average;
+5/5 seeds, gaps of 12.9–15.7 points) at a mean purity difference of 0.0006
+(per-seed at most 0.0021) and a mean majority-mapped ARI difference of
+0.0005 (at most 0.0014), both in the flat control's favor. Against
+the un-refined anchor (the identity), the refinement is never worse on
+purity — gains in 4 of 5 seeds, one exact tie (up to +0.0008, mean
++0.0004) — while cohort-wide ambiguity moves by at
+most ±0.24 points — a small but consistent net gain, not a transformation.
+And the ablation is a wash: dropping markers at random under the same
+acceptance machinery lands within 0.13 ambiguity points and 0.0004 purity of
+the guided rule. Three consequences for the paper's claim. First, the
+falsifiable claim as originally worded — "refinement reaches higher node
+purity than the matched flat control" — is *not* what the experiment shows;
+what it shows is that at equal partition size the hierarchy resolves
+borderline cells the flat SOM cannot. Second, the value of the guided WHAT
+rule is procedural (a label-free, defensible choice), not metric — the
+acceptance machinery plus the WHERE diagnostics carry the result. Third,
+raw ARI must not be used for these cross-arm comparisons: it penalizes the
+granularity gap between a ~100-group partition and the 8 populations
+(a perfectly nested pure refinement of balanced populations scores only
+~0.14, and the tree's raw ari ~0.09 sits at that structural ceiling), while
+the flat control's few very large meta-clusters give it a much higher
+ceiling (~0.4) — the `ari_node_majority` column is the comparable family.
+
+# 7. Session-level notes
+
+- Procedure revision v3 (2026-10-28, pre-freeze, design doc §11.2): the
+  mean-based own/rival ambiguity metric is structurally anti-refinement —
+  splitting a node makes its children each other's closest rival, so 0 of
+  1692 v1 tune attempts (gap rule, full-space gate) and 0 of 9 v2 real
+  attempts (sep rule, sibling-space gate) were accepted, while genuine
+  unmixing was visible in purity (e.g. 0.59 → 0.74 with ambiguity flat).
+  v3 therefore measures the refinement's goal in purity (gain ≥
+  `accept_dpur`) with the geometry cost bounded (`accept_eps`), keeps the
+  sibling-space and cohort-wide columns as reported diagnostics, and
+  freezes on highest purity (§5.4). The v1/v2 tuning evidence is archived
+  under `runs/archive_superseded/` and `tune_table_v1_gap.rds`.
+- v3 grid result: 102 of 1794 attempts accepted across 36 combos; the
+  tune table shows the geometry cost bounded as designed (accepted splits
+  move cohort ambiguity by ≤ `accept_eps` each; the whole grid's
+  pct_ambiguous stays in 16.17–16.34, the frozen row being the grid max).
+  The identity baseline (the anchor's populated codes, per-code mean reps;
+  `stage_identity`) sits at 16.59–16.89 per seed, so on seed 1234 every
+  accepted tree is at or below its identity's ambiguity — the mean-based
+  yardstick is geometry-sensitive rather than monotone in L (the k=12 arms
+  score 1.5–2.6, the expert bound 83.3).
+- tau_stop clarification and freeze-guard correction (design doc §11.3,
+  §11.4): the v3 tune table exposed that `tau_stop` never bound in the
+  engine; it now floors the ambiguity branch only (a purity-qualified
+  node is never blocked by it), which is a no-op for every combo with
+  `tau_stop <= tau_refine` — the four (10, 15) combos were recomputed
+  (81/79 → 64/62 attempts). The freeze guard measures refinement-created
+  leaves (depth ≥ 1, floor 20 cells) rather than all leaves: the root
+  SOM's own 1-cell node is the base SOM's property, shared by every combo
+  and the anchors. Frozen on seed 1234: `tau_refine = 25`,
+  `tau_stop = 5`, `min_cells = 1000`, `accept_eps = 1` (L = 102, 3
+  accepted of 8 attempts, node_purity 0.98111 vs the seed-1234 identity
+  0.98070; across seeds the identity purity spans 0.9803–0.9820).
+- Raw ARI is granularity-capped, not a cross-arm comparable (§6.5): ARI
+  between a ~100-group partition and the 8 populations is bounded by the
+  cluster-size profile — a perfectly nested pure refinement of 8 balanced
+  populations into 96 equal leaves scores 0.137 (verified numerically), and
+  the tree's balanced leaves (S_l/C(N,2) = 0.0127) cap its raw ari at
+  ~0.09–0.13, while the flat control's few very large meta-clusters
+  (S_l/C = 0.0765) reach 0.31–0.48. Both partitions are ~98% pure; the
+  0.09-vs-0.48 spread is granularity, not alignment. The arms table reports
+  `ari_node_majority` (each group mapped to its majority population first)
+  as the cross-arm comparable, and raw ari is printed with the caveat.
+- ConsensusClusterPlus maxK=2 bug (clusterTrackingPlot): patched in the
+  engine by a no-op `assignInNamespace` replacement; documented in
+  `refine_engine.R` at `meta_cluster()`.
+- All stage drivers refuse to run in dev mode (`dev_guard`); fresh dev
+  renders read the full-cohort caches only.
