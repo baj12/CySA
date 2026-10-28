@@ -139,3 +139,78 @@ test_that("node_dispersion is appended once and is NA for empty nodes", {
   out2 <- .ensureSOMStatsDispersion(out)
   expect_identical(colnames(S4Vectors::metadata(out2)$SOM_stats), colnames(st))
 })
+
+test_that("node_dispersion attributes SDs by label value, not level order", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  levs <- as.character(seq_len(10))
+  # Relevel the same labels: with a non-identity level order the level
+  # INDEX of a cell's cluster_id no longer equals its label value, so a
+  # level-index lookup would misattribute the per-node SDs.
+  sce$cluster_id <-
+    factor(levs[as.integer(sce$cluster_id)], levels = rev(levs))
+  exprs <- SummarizedExperiment::assay(sce, "exprs")
+  clusterId <- as.integer(as.character(
+    SingleCellExperiment::colData(sce)$cluster_id))
+  ref <- vapply(seq_len(10), function(lv) {
+    idx <- which(clusterId == lv)
+    if (length(idx) == 0L) {
+      return(NA_real_)
+    }
+    mean(matrixStats::rowSds(exprs[, idx, drop = FALSE]))
+  }, numeric(1))
+  out <- .ensureSOMStatsDispersion(sce)
+  got <- S4Vectors::metadata(out)$SOM_stats$node_dispersion
+  expect_true(all(is.finite(got)))
+  expect_equal(got, ref)
+})
+
+test_that("stale id-bearing cache labels are refreshed by id", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = rep(c("A", "B"), length.out = 10))
+  somFile <- file.path(tempdir(),
+    paste0("cysa-cache-", Sys.getpid(), "-stale-id.RDS"))
+  cacheF <- sub("\\.RDS$", ".subsampled.RData", somFile)
+  on.exit(unlink(c(somFile, cacheF)), add = TRUE)
+  saveRDS(sce, somFile)
+  sce2 <- sce
+  sce2$id <- seq_len(ncol(sce2))
+  # A cache from a run whose labels differ from the full object's current
+  # ones: the id path must refresh them rather than trust the cache.
+  sce_subsampled <- sce2[, 1:100]
+  sce_subsampled$cell_type <- "STALE"
+  save(sce_subsampled, file = cacheF)
+  prepped <- prepClusterSelectorData(sce2, somFile = somFile,
+    total_cells_to_sample = 100, cellTypeCol = "cell_type")
+  sub <- prepped$sce_subsampled
+  expect_false(all(as.character(
+    SingleCellExperiment::colData(sub)$cell_type) == "STALE"))
+  expect_identical(
+    as.character(SingleCellExperiment::colData(sub)$cell_type),
+    as.character(sce2$cell_type[
+      SingleCellExperiment::colData(sub)$id]))
+})
+
+test_that("stale label column in a cache without id is redrawn", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = rep(c("A", "B"), length.out = 10))
+  somFile <- file.path(tempdir(),
+    paste0("cysa-cache-", Sys.getpid(), "-stale-noid.RDS"))
+  cacheF <- sub("\\.RDS$", ".subsampled.RData", somFile)
+  on.exit(unlink(c(somFile, cacheF)), add = TRUE)
+  saveRDS(sce, somFile)
+  # A cache carrying a stale label column but no id cannot be refreshed
+  # in place, so the subsample is redrawn from the full object and the
+  # labels ride along in its colData.
+  sce_subsampled <- sce[, 1:100]
+  sce_subsampled$cell_type <- "STALE"
+  save(sce_subsampled, file = cacheF)
+  prepped <- prepClusterSelectorData(sce, somFile = somFile,
+    total_cells_to_sample = 100, cellTypeCol = "cell_type")
+  sub <- prepped$sce_subsampled
+  expect_false(all(as.character(
+    SingleCellExperiment::colData(sub)$cell_type) == "STALE"))
+  # The seeded redraw reproduces the same cells as the original draw.
+  ref <- withr::with_seed(123, .subsampleSce(sce, 100, "SOM_codes"))
+  expect_identical(SummarizedExperiment::colnames(sub),
+    SummarizedExperiment::colnames(ref))
+})

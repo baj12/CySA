@@ -10,7 +10,8 @@
   cellTypeCol,
   total,
   somCodesName,
-  seed = 123
+  seed = 123,
+  justDrawn = FALSE
 )
 }
 \arguments{
@@ -25,6 +26,9 @@
 \item{somCodesName}{Name of the SOM codes metadata slot.}
 
 \item{seed}{Seed used only by the redraw fallback.}
+
+\item{justDrawn}{\code{TRUE} when \code{sub} was drawn in this call from
+\code{sce} and already carries the labels.}
 }
 \value{
 The subsample with the label column present (or \code{sub}
@@ -32,9 +36,12 @@ unchanged when \code{cellTypeCol} is \code{NULL}).
 }
 \description{
 Makes sure the subsample carries the per-cell label column. A subsample
-already holding the column is returned unchanged; one with an \code{id}
-colData column indexing the full object gets the labels copied in by
-index; otherwise the subsample is redrawn from the full object so the
-labels ride along in its colData.
+freshly drawn from the full object is returned unchanged (the labels
+ride along in its colData); one with an \code{id} colData column
+indexing the full object gets the labels copied in by index; otherwise
+the subsample is redrawn from the full object so the labels ride along
+in its colData. A subsample loaded from a cache is never trusted to hold
+current labels: its labels are refreshed by \code{id} when possible and
+the cache is redrawn otherwise.
 }
 \keyword{internal}

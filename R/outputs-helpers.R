@@ -94,7 +94,8 @@
     plotIdx <- if (plotIdxLocal == st$nPlots) st$activePlot() else plotIdxLocal
     shiny::req(length(dimSel) >= plotIdx)
     dims <- dimSel[[plotIdx]]$dims
-    pp1 <- st$getBasePlot(dims[1L], dims[2L], input$somColorVar %||% "n",
+    colorVar <- input$somColorVar %||% "n"
+    pp1 <- st$getBasePlot(dims[1L], dims[2L], colorVar,
         input$somSizeVar %||% "max")
     p3 <- if (isTRUE(input$showGroups)) {
         projectionDf <- st$somProjectionDf()
@@ -108,11 +109,42 @@
     if (is.null(p3)) {
         return(NULL)
     }
+    # The projection view colours by group and carries no legend; a
+    # categorical property colour (the known-label majority) is meaningless
+    # without one in the plain view.
+    showLegend <- if (isTRUE(input$showGroups)) FALSE else
+        .somScatterLegendOn(st$sce, colorVar)
     quiet_ggplotly(p3, source = paste0("somData", plotIdxLocal),
         tooltip = "") %>%
-        plotly::layout(showlegend = FALSE, dragmode = "select") %>%
+        plotly::layout(showlegend = showLegend, dragmode = "select") %>%
         plotly::event_register("plotly_selected") %>%
         plotly::event_register("plotly_relayout")
+}
+
+#' Whether a SOM Plot Colour Needs a Legend
+#'
+#' The SOM 2D plots suppress the legend for their statistic colourings:
+#' numeric colour bars and the cluster-code palette need none in the
+#' interactive views. A categorical known property -- the node's majority
+#' cell type -- is meaningless without one, so the plotly views keep the
+#' legend for those columns only.
+#'
+#' @param sce The \code{SingleCellExperiment} being plotted.
+#' @param colorVar Colour column name, or \code{NULL}.
+#'
+#' @return \code{TRUE} when the colour column is a non-numeric column of
+#'   the node labels, \code{FALSE} otherwise.
+#'
+#' @keywords internal
+.somScatterLegendOn <- function(sce, colorVar) {
+    if (is.null(colorVar) || is.na(colorVar)) {
+        return(FALSE)
+    }
+    nl <- S4Vectors::metadata(sce)$node_labels
+    if (is.null(nl) || !colorVar %in% colnames(nl)) {
+        return(FALSE)
+    }
+    !is.numeric(nl[[colorVar]])
 }
 
 #' Plot Coordinates of a Clicked Ridge Cell and Its SOM Node
@@ -210,6 +242,7 @@
     somPlot(
         st$somBasePlot(), 1L, rs, colorbyGroups, showGroups,
         dimSelection = dimSel, sce = st$sce, metaD = st$metaD,
+        colorVar = input$somColorVar %||% "n",
         outputList = st$rv$outputList,
         projectionDf = if (isTRUE(showGroups) || isTRUE(nnAgreement)) {
             st$somProjectionDf()

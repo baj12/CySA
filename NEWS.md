@@ -18,7 +18,7 @@
 - New `plotNodeProps()` draws the node-properties plane: node purity against
   cell count, joined with the ambiguity columns when provided. In the app it
   is a selectable plot box -- a lasso or click there selects nodes everywhere
-  -- and when labels are present it offers selection by purity threshold.
+  -- and when labels are present its x axis defaults to node purity.
 - With labels present, the SOM 2D plots offer purity and the node's majority
   label among their color and size choices.
 - `vignettes/spectral_flow_case_detailed_study.Rmd` gains a closing section
@@ -28,6 +28,11 @@
 
 ## Bug fixes
 
+* A subsample cache whose saved labels no longer match the full object now
+  has its labels refreshed (by `id` when the cache carries one, otherwise
+  by redrawing the seeded subsample) instead of being trusted; the refresh
+  path also no longer fails under R's stricter handling of assignments
+  into namespace-qualified calls.
 * `R CMD check`'s "R code for possible problems" note is back to its
   pre-feature set: the names that `.applyLabelStatsToBundle()` restores from
   the saved bundle (`dList`, `dend_obj`, `dend_table`) are declared in

@@ -55,10 +55,22 @@ plotSOMScatter <- function(x, chs, metaSlot = "SOM_codes", pointSize = "n",
     col <- .somScatterColour(dat$df, color_by, x, k_pal)
     if (!pointSize %in% colnames(dat$df)) pointSize <- NULL
     aesArgs <- list(x = rlang::sym(dat$chs[1]), y = rlang::sym(dat$chs[2]))
-    if (!is.null(pointSize)) aesArgs$size <- rlang::sym(pointSize)
+    if (!is.null(pointSize)) {
+        # An NA size (the purity of an unlabeled node) would drop the node
+        # at draw time: map NA to a neutral size so the node still draws.
+        # A separate column leaves the colour path's own NA rendering (via
+        # its scales' na.value) untouched.
+        dat$df$sizeVal <- dat$df[[pointSize]]
+        dat$df$sizeVal[is.na(dat$df$sizeVal)] <- 2
+        aesArgs$size <- rlang::sym("sizeVal")
+    }
     if (!is.null(col$var)) aesArgs$color <- rlang::sym(col$var)
     p1 <- ggplot2::ggplot(dat$df, do.call(ggplot2::aes, aesArgs)) +
         ggplot2::geom_point(alpha = 0.2, na.rm = TRUE)
+    # Restore the size legend title, which the aes now reads from sizeVal.
+    if (!is.null(pointSize)) {
+        p1 <- p1 + ggplot2::scale_size_continuous(name = pointSize)
+    }
     for (layer in list(col$scale, col$guides, dat$ylab, dat$facet)) {
         if (!is.null(layer)) p1 <- p1 + layer
     }

@@ -265,6 +265,45 @@ test_that("somPlot returns ggplotly-compatible object", {
   expect_true(inherits(p, "plotly") || inherits(p, "ggplot"))
 })
 
+test_that(".somScatterLegendOn fires for known-type colours only", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10)
+  # Numeric statistics and node dispersion carry a colour bar, not a legend.
+  expect_false(.somScatterLegendOn(sce, "n"))
+  expect_false(.somScatterLegendOn(sce, "node_dispersion"))
+  labeled <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", rep(1:3, length.out = 10)))
+  labeled <- prepClusterSelectorData(labeled, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")$sce
+  expect_true(.somScatterLegendOn(labeled, "cell_type_majority"))
+  expect_false(.somScatterLegendOn(labeled, "purity"))
+})
+
+test_that("somPlot shows the legend for known-type colours only", {
+  skip_if_not_installed("plotly")
+  labeled <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", rep(1:3, length.out = 10)))
+  labeled <- prepClusterSelectorData(labeled, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")$sce
+  dimSelection <- list(list(
+    dims = c("marker1", "marker2"),
+    xlim = c(0, 1), ylim = c(0, 1),
+    xzoom = NULL, yzoom = NULL
+  ))
+  pp1 <- plotSOMScatter(labeled, chs = c("marker1", "marker2"),
+    color_by = "cell_type_majority")
+  p <- somPlot(pp1, plotIdx = 1L, rs = c(1L, 2L),
+    colorbyGroups = NULL, showGroups = FALSE, dimSelection = dimSelection,
+    sce = labeled, somCodesName = "SOM_codes",
+    colorVar = "cell_type_majority")
+  expect_true(isTRUE(p$x$layout$showlegend))
+  # Numeric colourings keep the legend hidden.
+  pp2 <- plotSOMScatter(labeled, chs = c("marker1", "marker2"))
+  p2 <- somPlot(pp2, plotIdx = 1L, rs = c(1L, 2L),
+    colorbyGroups = NULL, showGroups = FALSE, dimSelection = dimSelection,
+    sce = labeled, somCodesName = "SOM_codes", colorVar = "n")
+  expect_false(isTRUE(p2$x$layout$showlegend))
+})
+
 # ══════════════════════════════════════════════════════════════════════════════
 # tsneFunc
 # ══════════════════════════════════════════════════════════════════════════════

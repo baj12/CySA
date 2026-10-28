@@ -95,7 +95,8 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
     }
     sce_subsampled <- .restoreSubsampledAssay(sce_subsampled, sce, assay)
     sce_subsampled <- .mergeLabelsIntoSubsample(sce_subsampled, sce,
-        cellTypeCol, total_cells_to_sample, somCodesName, seed)
+        cellTypeCol, total_cells_to_sample, somCodesName, seed,
+        justDrawn = !cacheHit)
     # The cache stores the merged subsample, so later calls find the label
     # column already in place.
     if (!cacheHit && !is.null(cacheFile)) {
@@ -137,8 +138,10 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
         somCodes <- S4Vectors::metadata(sce)[[somCodesName]]
         exprs <- SummarizedExperiment::assay(sce, assay)[colnames(somCodes),
             , drop = FALSE]
-        clusterId <- as.integer(
-            SingleCellExperiment::colData(sce)$cluster_id)
+        # Parse the level labels: with a non-identity level order the level
+        # index of a factor value is not its label value.
+        clusterId <- as.integer(as.character(
+            SingleCellExperiment::colData(sce)$cluster_id))
         idxByCluster <- split(seq_along(clusterId), clusterId)
         # SOM_stats rows are in node-id order, as everywhere else in the
         # package (e.g. .somScatterInputs).
@@ -283,10 +286,13 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
 #' Copy the Known Labels into a Subsample
 #'
 #' Makes sure the subsample carries the per-cell label column. A subsample
-#' already holding the column is returned unchanged; one with an \code{id}
-#' colData column indexing the full object gets the labels copied in by
-#' index; otherwise the subsample is redrawn from the full object so the
-#' labels ride along in its colData.
+#' freshly drawn from the full object is returned unchanged (the labels
+#' ride along in its colData); one with an \code{id} colData column
+#' indexing the full object gets the labels copied in by index; otherwise
+#' the subsample is redrawn from the full object so the labels ride along
+#' in its colData. A subsample loaded from a cache is never trusted to hold
+#' current labels: its labels are refreshed by \code{id} when possible and
+#' the cache is redrawn otherwise.
 #'
 #' @param sub Subsampled \code{SingleCellExperiment}, or \code{NULL}.
 #' @param sce The full \code{SingleCellExperiment}.
@@ -294,29 +300,36 @@ prepClusterSelectorData <- function(sce, somFile = NULL, dList = NULL,
 #' @param total Approximate total number of cells for the redraw fallback.
 #' @param somCodesName Name of the SOM codes metadata slot.
 #' @param seed Seed used only by the redraw fallback.
+#' @param justDrawn \code{TRUE} when \code{sub} was drawn in this call from
+#'   \code{sce} and already carries the labels.
 #'
 #' @return The subsample with the label column present (or \code{sub}
 #'   unchanged when \code{cellTypeCol} is \code{NULL}).
 #'
 #' @keywords internal
 .mergeLabelsIntoSubsample <- function(sub, sce, cellTypeCol, total,
-    somCodesName, seed = 123) {
+    somCodesName, seed = 123, justDrawn = FALSE) {
     if (is.null(cellTypeCol) || is.null(sub)) {
         return(sub)
     }
-    if (cellTypeCol %in% colnames(SingleCellExperiment::colData(sub))) {
+    if (justDrawn) {
         return(sub)
     }
     subId <- SingleCellExperiment::colData(sub)$id
     if (!is.null(subId) && !anyNA(subId) && is.numeric(subId) &&
         all(subId >= 1L) && all(subId <= ncol(sce))) {
-        SingleCellExperiment::colData(sub)[[cellTypeCol]] <-
-            as.character(
-                SingleCellExperiment::colData(sce)[[cellTypeCol]])[subId]
+        # Assign through the object's own replacement method: a qualified
+        # call on the left of a subset assignment (colData(sub)[[col]] <-
+        # ...) needs a 'colData<-' export that SingleCellExperiment does
+        # not provide, and DataFrame column assignment copies rather than
+        # mutating in place.
+        sub[[cellTypeCol]] <- as.character(
+            SingleCellExperiment::colData(sce)[[cellTypeCol]])[subId]
         return(sub)
     }
-    # The cached subsample predates the label column and carries no id that
-    # indexes the full object: redraw it so the labels travel in colData.
+    # No id indexing the full object: redraw the subsample so the labels
+    # travel in colData. The package seed reproduces the original draw, so
+    # a cache written by this function is redrawn into the same cells.
     withr::with_seed(seed, .subsampleSce(sce, total, somCodesName))
 }
 

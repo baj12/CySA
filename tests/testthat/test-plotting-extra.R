@@ -113,6 +113,26 @@ test_that("plotSOMScatter ignores unknown color_by without error", {
     color_by = "purity"), "ggplot")
 })
 
+test_that("NA-purity nodes stay plotted when purity is the size", {
+  sce <- CySA_example_sce(n_cells = 200, n_nodes = 10,
+    cell_types = paste0("t", rep(1:3, length.out = 10)))
+  # Node 3 holds only NA-labelled cells: its purity is NA.
+  lab <- sce$cell_type
+  lab[sce$cluster_id == "3"] <- NA
+  sce$cell_type <- lab
+  prepped <- prepClusterSelectorData(sce, total_cells_to_sample = 100,
+    cellTypeCol = "cell_type")
+  nl <- S4Vectors::metadata(prepped$sce)$node_labels
+  expect_true(is.na(nl$purity[nl$id == 3L]))
+  p <- plotSOMScatter(prepped$sce, chs = c("marker1", "marker2"),
+    pointSize = "purity", color_by = "purity", zeros = TRUE)
+  built <- ggplot2::ggplot_build(p)
+  stats <- S4Vectors::metadata(prepped$sce)$SOM_stats
+  # Every node is drawn, with a finite mapped size for the NA-purity node.
+  expect_identical(nrow(built$data[[1]]), nrow(stats))
+  expect_true(all(is.finite(built$data[[1]]$size)))
+})
+
 # ══════════════════════════════════════════════════════════════════════════════
 # .somStatChoices (sidebar color/size choices)
 # ══════════════════════════════════════════════════════════════════════════════

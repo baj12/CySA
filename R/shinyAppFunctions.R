@@ -252,7 +252,7 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups,
     dimSelection = NULL, somCodesName = "SOM_codes", sce,
     metaD = S4Vectors::metadata(sce), outputList = list(),
     projectionDf = NULL, xlim = NULL, ylim = NULL, source = NULL,
-    agreement = NULL, cellHighlight = NULL) {
+    agreement = NULL, cellHighlight = NULL, colorVar = NULL) {
     if (is.null(pp1)) {
         return(NULL)
     }
@@ -279,12 +279,17 @@ somPlot <- function(pp1, plotIdx, rs, colorbyGroups, showGroups,
     }
     # Limits are applied to the ggplot before the plotly conversion.
     p3 <- p3 + .somCoord(ds, xlim, ylim)
+    # The projection and agreement views colour by group and carry no
+    # legend; a categorical property colour (the known-label majority) is
+    # meaningless without one in the plain view.
+    showLegend <- if (showGroups || !is.null(agreement)) FALSE else
+        .somScatterLegendOn(sce, colorVar)
     # Use an explicit source when supplied; otherwise derive it from the
     # plot index.
     if (plotIdx > 5L) plotIdx <- 6L
     plotSource <- if (!is.null(source)) source else paste0("somData", plotIdx)
     quiet_ggplotly(p3, source = plotSource, tooltip = "") %>%
-        layout(showlegend = FALSE, dragmode = "select") %>%
+        layout(showlegend = showLegend, dragmode = "select") %>%
         event_register("plotly_selected") %>%
         event_register("plotly_relayout")
 }

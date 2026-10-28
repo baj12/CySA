@@ -124,6 +124,23 @@ test_that("somData1 uses the projection path when showGroups is TRUE", {
   )
 })
 
+test_that("somData1 shows the legend for the known-type colouring", {
+  fx <- make_labeled_test_app()
+  quiet_plotly_test(
+    testServer(fx$app, {
+      select_dims(session, "marker1", "marker2")
+      select_nodes(session, "1, 2, 3")
+      session$setInputs(showGroups = FALSE, colorbyGroups = character(0))
+      session$setInputs(somColorVar = "cell_type_majority")
+      q <- output$somData1
+      if (is.character(q)) {
+        q <- jsonlite::fromJSON(q, simplifyVector = FALSE)
+      }
+      expect_true(isTRUE(q$x$layout$showlegend))
+    })
+  )
+})
+
 # ---- Gap 3: somDataMain ------------------------------------------------------
 
 test_that("SOM 2D box renders the optional neighbourhood-agreement checkbox", {

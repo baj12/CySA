@@ -2379,8 +2379,9 @@ mixed[order(mixed$purity), ]
 ```
 
 `r n_pure` of the `r nrow(nl)` nodes are essentially pure (purity >= 0.95) and
-`r n_mixed` fall below 0.90; purity is NA for the nodes the dev subsample left
-empty. Pure nodes are the expectation: a 100-node SOM on well-separated
+`r n_mixed` fall below 0.90; purity is NA for the nodes that hold no
+labeled cells in the full object. Pure nodes are the expectation: a 100-node
+SOM on well-separated
 cytometry populations places most nodes inside one population. The mixed rows
 are the interesting ones, and this document's earlier diagnostics predict
 where they come from: the naive -> memory -> TEMRA axis is a continuum, so its
