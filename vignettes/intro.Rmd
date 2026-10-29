@@ -3,17 +3,17 @@ title: "Introduction to CySA"
 author: "Bernd Jagla, Institut Pasteur"
 date: "`r Sys.Date()`"
 output:
-  rmarkdown::html_vignette:
-    toc: true
-    toc_depth: 2
-  BiocStyle::html_document:
-      toc: true
-      toc_float: true
+    rmarkdown::html_vignette:
+        toc: true
+        toc_depth: 2
+    BiocStyle::html_document:
+        toc: true
+        toc_float: true
 package: CySA
 vignette: >
-  %\VignetteIndexEntry{Introduction to CySA}
-  %\VignetteEncoding{UTF-8}
-  %\VignetteEngine{knitr::rmarkdown}
+    %\VignetteIndexEntry{Introduction to CySA}
+    %\VignetteEncoding{UTF-8}
+    %\VignetteEngine{knitr::rmarkdown}
 ---
 
 ```{r setup, include = FALSE}

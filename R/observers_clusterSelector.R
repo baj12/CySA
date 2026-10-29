@@ -90,7 +90,8 @@
             if (!is.na(move$idx)) {
                 st$activePlot(move$idx)
                 shiny::updateSelectInput(session = session,
-                    inputId = "dimPairSelect", selected = as.character(move$idx))
+                    inputId = "dimPairSelect",
+                    selected = as.character(move$idx))
             }
         },
         ignoreNULL = TRUE

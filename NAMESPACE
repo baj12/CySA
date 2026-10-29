@@ -40,7 +40,7 @@ importFrom(collapsibleTree,
 importFrom(cowplot,theme_cowplot)
 importFrom(data.table,rbindlist)
 importFrom(dplyr,
-  `%>%`,
+  "%>%",
   as_tibble,
   count,
   filter,

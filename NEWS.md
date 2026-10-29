@@ -1,3 +1,21 @@
+# CySA 0.99.42
+
+## Bug fixes
+
+- The PDF download no longer receives an empty FlowSOM-stars page:
+  `PlotStars()` is now called with `list_insteadof_ggarrange = TRUE`, so the
+  `$tree` element the registry reads actually exists.
+
+## Maintenance
+
+- Declared `xe`/`ye` as global variables (R CMD check NOTE).
+- Excluded rendered vignette HTML and development files from the built
+  tarball (it was 141 MB; now about 5 MB).
+- Removed `suppressWarnings()` from the ridge click parser and wrapped two
+  lines over 80 characters; vignette YAML is indented in multiples of 4.
+- New tests lift every R source file above 80% coverage (the diffcyt
+  observer guards, the t-test and cell-count helpers, and the PDF helpers).
+
 # CySA 0.99.41
 
 ## New features

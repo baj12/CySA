@@ -114,7 +114,11 @@
         return(NULL)
     }
     parts <- strsplit(cd, "\x1f", fixed = TRUE)[[1]]
-    cell <- suppressWarnings(as.integer(parts[length(parts)]))
+    last <- parts[length(parts)]
+    if (!grepl("^[0-9]+$", last)) {
+        return(NULL)
+    }
+    cell <- as.integer(last)
     if (is.na(cell)) {
         return(NULL)
     }

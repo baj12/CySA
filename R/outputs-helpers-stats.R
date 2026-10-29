@@ -285,7 +285,8 @@
         flowSOMStars = if (!is.null(st$fsom)) {
             function() {
                 FlowSOM::PlotStars(st$fsom,
-                    backgroundValues = st$fsom$metaclustering)$tree
+                    backgroundValues = st$fsom$metaclustering,
+                    list_insteadof_ggarrange = TRUE)$tree
             }
         },
         violin1 = function() {
