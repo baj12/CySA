@@ -69,3 +69,6 @@ CySA.proj
 ^vignettes/refinement_experiment\.Rmd$
 ^vignettes/41598_2025_Article_12153\.pdf$
 ^vignettes/41598_2025_12153_MOESM1_ESM\.docx$
+^vignettes/.*\.html$
+^vignettes/CySA_paper_vignette_discussion\.md$
+^vignettes/omip-112$

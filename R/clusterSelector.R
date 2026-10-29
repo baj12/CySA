@@ -7,7 +7,7 @@ utils::globalVariables(c(
     ".", ".data", "..ncount..", "counts", "groups", "id", "marker", "expr",
     "grpName", "Percent", "n", "value", "variable", "cluster", "colGrp",
     "x", "y", "xend", "yend", "customdata", "label", "tsne1", "tsne2",
-    "umap1", "umap2",
+    "umap1", "umap2", "xe", "ye",
     "pc1", "pc2", "rowElement", "cellCounts", "cellPercentages",
     "dend", "dendTable", "clusterPatientTable", "somRasterData",
     "somRasterObj", "sce_subsampled", "metaD", "sceRN", "sceCN",
