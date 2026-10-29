@@ -50,3 +50,6 @@ vignettes/support/cyet/qc/
 *.bak
 vignettes/spectral_flow_case_detailed_study.pdf
 vignettes/spectral_analysis_refine/
+
+# OMIP-112 data (Radboud DUA, large files, recovery codes) - never commit
+vignettes/omip-112/
