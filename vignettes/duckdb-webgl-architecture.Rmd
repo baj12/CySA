@@ -1,0 +1,198 @@
+---
+title: "High-Performance scRNAseq Visualization: DuckDB + WebGL in Shiny"
+author: "Bernd Jagla"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{High-Performance scRNAseq Visualization: DuckDB + WebGL in Shiny}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+## Problem Statement
+
+Standard Shiny apps for scRNAseq visualization (ggplot2, plotly) break down at scale:
+
+- **Canvas 2D / SVG** rendering collapses above ~100k cells
+- **JSON serialization** of 5M-row dataframes from R to the browser is catastrophic (2–3 GB text, minutes to serialize)
+- **Row-based data structures** (standard R dataframes) are slow for analytical queries (cluster summaries, gene expression filtering)
+
+**Target scale:** up to 5 million cells, single user, single machine.
+
+---
+
+## Proposed Architecture
+
+```
+scRNAseq data (h5ad / AnnData)
+        │
+        ▼
+  DuckDB (Parquet)          ← columnar storage, analytical queries
+        │
+        │  filter / aggregate
+        ▼
+   R dataframe              ← only the cells/columns needed
+        │
+        │  reglScatterplot()
+        ▼
+reglScatterplotR widget     ← Uint16-quantised binary → base64 → HTML
+        │
+        │  htmlwidgets transfer
+        ▼
+  regl-scatterplot (JS)     ← WebGL GPU rendering
+        │
+        ▼
+  Browser canvas            ← 5M points at interactive framerates
+```
+
+### Why DuckDB
+
+DuckDB is an **in-process OLAP database** — no server, no daemon, embeds directly in the R session. Key properties relevant here:
+
+- **Columnar storage**: queries like `SELECT sum(expression) WHERE gene = 'CD3D'` read only the relevant column, not full rows
+- **Vectorized execution engine**: processes ~1024 rows per CPU instruction batch, exploiting SIMD (Single Instruction, Multiple Data) CPU instructions
+- **Direct Parquet queries**: `SELECT * FROM 'cells.parquet'` without loading into memory first
+- **Parallel execution**: uses all CPU cores automatically
+- **Out-of-core processing**: datasets larger than RAM handled via disk spill
+
+DuckDB's role in this architecture is **upstream of rendering**: filter cells by cluster, gene expression threshold, or metadata before passing to `reglScatterplot()`. It does not participate in pan/zoom interactions (those happen client-side in WebGL).
+
+### Why WebGL / reglScatterplotR
+
+**WebGL** gives browser code direct GPU access. A GPU runs thousands of shader instances in parallel — the same instruction on thousands of pixels simultaneously. This is essential for 5M-point scatter plots where Canvas 2D would take seconds per frame.
+
+**`reglScatterplotR`** (Bioconductor devel, releasing 3.24 Nov 2026) is an `htmlwidgets` wrapper around the JavaScript [`regl-scatterplot`](https://github.com/flekschas/regl-scatterplot) library.
+
+---
+
+## reglScatterplotR: How It Works
+
+### Data transfer mechanism
+
+The critical bottleneck in Shiny at this scale is **R → browser serialization**. `reglScatterplotR` bypasses JSON entirely:
+
+1. R normalises coordinates to `[-1, 1]`
+2. All numeric buffers (x, y, color, size, opacity) are **Uint16-quantised** (float64 → 16-bit integer, 2 bytes/value)
+3. Quantised arrays are **base64-encoded** and embedded in the widget HTML
+4. The JS side feeds these directly into WebGL typed arrays — zero JSON parse overhead
+
+**Memory estimate at 5M cells:**
+```
+5,000,000 cells × (x, y, color) channels × 2 bytes = ~30 MB HTML payload
+```
+The package README confirms: 10–40 MB for 500k–5M cells.
+
+### Performance mode
+
+At `n > 500,000` cells, `.performanceDefaults` activates automatically:
+
+- Point size forced to 1
+- Opacity forced to 1
+- Per-point tooltips disabled (they slow rendering)
+
+For 5M cells, this mode is always active.
+
+### Supported input objects
+
+`reglScatterplot()` dispatches on:
+
+- `data.frame`
+- `SingleCellExperiment`
+- `SpatialExperiment`
+- `Seurat`
+- `Monocle3`
+- In-memory AnnData
+- Plain matrices
+
+### Client-side filtering
+
+The `filterBy` parameter filters cells **in JavaScript** without an R round-trip:
+
+```r
+reglScatterplot(
+  df,
+  x = "UMAP_1", y = "UMAP_2",
+  colorBy = "cluster",
+  filterBy = list(list(col = "nCount_RNA", min = 1000, max = 50000))
+)
+```
+
+This is important for interactive filtering at scale — triggering a full R re-render on every slider change re-serializes the payload each time.
+
+### Basic usage
+
+```r
+library(reglScatterplotR)
+
+# From a data.frame
+reglScatterplot(df, x = "UMAP_1", y = "UMAP_2", colorBy = "cluster")
+
+# From Seurat (colorBy resolves metadata columns or gene names via FetchData)
+reglScatterplot(seurat_obj, colorBy = "CD3D")
+
+# Continuous palette with percentile clipping
+reglScatterplot(df, x = "UMAP_1", y = "UMAP_2",
+                colorBy = "CD3D",
+                continuousPalette = "viridis",
+                vmin = "p1", vmax = "p99")
+
+# Synchronised pan/zoom across multiple plots
+reglScatterplot(df, x = "UMAP_1", y = "UMAP_2", colorBy = "cluster", syncPlots = TRUE)
+reglScatterplot(df, x = "UMAP_1", y = "UMAP_2", colorBy = "CD3D",    syncPlots = TRUE)
+```
+
+### Shiny integration
+
+```r
+library(shiny)
+library(reglScatterplotR)
+library(duckdb)
+
+ui <- fluidPage(
+  selectInput("gene", "Color by gene:", choices = c("CD3D", "CD19", "GAPDH")),
+  reglScatterplotOutput("umap")
+)
+
+server <- function(input, output, session) {
+  con <- dbConnect(duckdb(), "cells.duckdb")
+
+  cells <- reactive({
+    # DuckDB handles filtering; only relevant cells reach the widget
+    dbGetQuery(con, sprintf(
+      "SELECT UMAP_1, UMAP_2, cluster, %s AS expr FROM cells WHERE cluster != 'doublet'",
+      input$gene
+    ))
+  })
+
+  output$umap <- renderReglScatterplot({
+    reglScatterplot(cells(), x = "UMAP_1", y = "UMAP_2", colorBy = "expr")
+  })
+
+  onStop(function() dbDisconnect(con))
+}
+```
+
+---
+
+## Open Questions / Next Steps
+
+- [ ] Benchmark actual serialize time at 5M cells on target hardware
+- [ ] Evaluate `filterBy` vs. DuckDB re-query for interactive filter responsiveness
+- [ ] Test lasso selection → Shiny input → DuckDB downstream query loop
+- [ ] Assess Uint16 quantisation precision loss for continuous gene expression (65536 levels)
+- [ ] Confirm `syncPlots` behaviour across multiple `reglScatterplot()` calls in a single Shiny session
+- [ ] Investigate AnnData → Parquet conversion pipeline (likely via `anndata` Python package or `zellkonverter`)
+
+---
+
+## Key References
+
+- [reglScatterplotR GitHub](https://github.com/george123ya/reglScatterplotR) — upstream source (MIT)
+- [regl-scatterplot JS library](https://github.com/flekschas/regl-scatterplot) — Lekschas, F. (2023)
+- [DuckDB](https://duckdb.org) — in-process OLAP database
+- [WebGL](https://www.khronos.org/webgl/) — GPU access from the browser
+- Bioconductor release target: 3.24 (November 2026)
